@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DossierSummary } from '../../../api/stocks';
 
@@ -49,7 +49,7 @@ describe('BoardDossier', () => {
     const cell = render(<BoardDossierCell summary={adjusted} price={1400} />);
     expect(cell.container.textContent).not.toMatch(/%/);
     expect(cell.container.textContent).toMatch(/ex-div|除權息|除权息/);
-    expect(cell.container.textContent).toContain('结构突破'); // 結構方向不受影響；沒有 Provider 時預設 zh
+    expect(cell.container.textContent).toContain('▼突破'); // 結構方向不受影響；沒有 Provider 時預設 zh
     cell.unmount();
     render(<BoardDossierPanel code="1516.TW" summary={adjusted} price={24.73} levelAlertsEnabled />);
     expect(screen.getByRole('note')).toBeInTheDocument();
@@ -120,9 +120,88 @@ describe('BoardDossier', () => {
 
   it('shows the structure kind in plain words only under Chinese UI, keeping unknown kinds', () => {
     const { container, rerender } = render(<BoardDossierCell summary={summary} price={1400} />);
-    expect(container.textContent).toContain('结构突破'); // 沒有 Provider 時預設 zh
+    expect(container.textContent).toContain('▼突破'); // 沒有 Provider 時預設 zh
     expect(container.textContent).not.toContain('BOS');
     rerender(<BoardDossierCell summary={{ ...summary, structure: { ...summary.structure!, kind: 'SWEEP' } }} price={1400} />);
     expect(container.textContent).toContain('SWEEP');
+  });
+
+  it('keeps the structure cell on one line: direction · support · resistance', () => {
+    render(<BoardDossierCell summary={summary} price={1375} />);
+    const cell = screen.getByTestId('board-dossier-cell');
+    expect(cell).toHaveClass('whitespace-nowrap');
+    expect(cell.textContent).toBe('▼突破 · 撑 -0.7% · 压 +1.5%');
+    // no stacked block rows inside
+    expect(cell.querySelectorAll('div')).toHaveLength(0);
+  });
+
+  const jargon: DossierSummary = {
+    ...summary,
+    levels: [
+      { label: 'SSL', low: 1300, high: 1300, kind: 'ssl', bias: null },
+      { label: '空頭 FVG', low: 1390, high: 1400, kind: 'fvg', bias: 'bear' },
+    ],
+  };
+
+  it('translates SSL / FVG / OB into plain words and keeps the raw label in the tooltip', async () => {
+    render(<BoardDossierPanel code="3324.TWO" summary={jargon} price={1375} />);
+    const lines = screen.getByTestId('board-dossier-summary');
+    expect(lines.textContent).not.toMatch(/SSL|FVG|\bOB\b/);
+    expect(lines.textContent).toContain('前低流动性');
+    expect(lines.textContent).toContain('空头缺口未补');
+    fireEvent.mouseEnter(within(lines).getByText('前低流动性').parentElement!);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('SSL');
+    // OB from the base fixture too
+    cleanup();
+    render(<BoardDossierPanel code="3324.TWO" summary={summary} price={1375} />);
+    expect(screen.getByTestId('board-dossier-summary').textContent).not.toMatch(/\bOB\b/);
+    expect(screen.getByTestId('board-dossier-summary').textContent).toContain('多头订单块');
+  });
+
+  it('splits the summary into a text-sm numbers line and a muted text-xs structure/date line', () => {
+    render(<BoardDossierPanel code="3324.TWO" summary={summary} price={1375} />);
+    const [numbers, meta] = Array.from(screen.getByTestId('board-dossier-summary').children);
+    expect(numbers).toHaveClass('text-sm');
+    expect(numbers.textContent).toContain('-0.7%');
+    expect(meta).toHaveClass('text-xs', 'text-secondary-text');
+    expect(meta.textContent).toContain('2026-10-21');
+    expect(meta.textContent).toContain('10-19');
+  });
+
+  describe('action row mode', () => {
+    it('puts View report, Four pillars and Create alert in one row, and the alert opens a menu when level alerts exist', () => {
+      const onOpenReport = vi.fn();
+      const onCreateAlert = vi.fn();
+      render(
+        <BoardDossierPanel code="3324.TWO" summary={summary} price={1375} levelAlertsEnabled onOpenReport={onOpenReport} onCreateAlert={onCreateAlert} />,
+      );
+      const row = screen.getByTestId('board-expanded-actions');
+      const names = within(row).getAllByRole('button').map((b) => b.textContent);
+      expect(names).toEqual(['看报告', '四维度', '建立警报']);
+      fireEvent.click(within(row).getByRole('button', { name: '看报告' }));
+      expect(onOpenReport).toHaveBeenCalledTimes(1);
+      fireEvent.click(within(row).getByRole('button', { name: '建立警报' }));
+      const menu = screen.getByRole('menu');
+      expect(within(menu).getAllByRole('menuitem').map((m) => m.textContent)).toEqual(['自定义警报', '建立价位警报']);
+      fireEvent.click(within(menu).getByRole('menuitem', { name: '自定义警报' }));
+      expect(onCreateAlert).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+      fireEvent.click(within(row).getByRole('button', { name: '四维度' }));
+      expect(screen.getByRole('dialog')).toHaveTextContent('drawer 3324.TWO');
+    });
+
+    it('uses a plain Create alert button when there is only the custom alert', () => {
+      const onCreateAlert = vi.fn();
+      render(<BoardDossierPanel code="3324.TWO" summary={summary} price={1375} onOpenReport={vi.fn()} onCreateAlert={onCreateAlert} />);
+      fireEvent.click(screen.getByRole('button', { name: '建立警报' }));
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+      expect(onCreateAlert).toHaveBeenCalledTimes(1);
+    });
+
+    it('still shows the actions for a stock without a summary, minus Four pillars', () => {
+      render(<BoardDossierPanel code="NVDA" summary={null} onOpenReport={vi.fn()} onCreateAlert={vi.fn()} />);
+      const names = within(screen.getByTestId('board-expanded-actions')).getAllByRole('button').map((b) => b.textContent);
+      expect(names).toEqual(['看报告', '建立警报']);
+    });
   });
 });

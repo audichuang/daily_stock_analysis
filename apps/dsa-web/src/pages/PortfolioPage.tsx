@@ -1,53 +1,73 @@
 import { AlertBellLink } from '../components/alerts/AlertBellLink';
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Layers3, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
+import { Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { UNSAFE_LocationContext, UNSAFE_NavigationContext } from 'react-router-dom';
+import { AlertTriangle, Info, Layers3, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
 import { decisionSignalsApi } from '../api/decisionSignals';
 import { portfolioApi } from '../api/portfolio';
 import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
 import {
   ApiErrorAlert,
+  AppPage,
   Badge,
   Button,
   Card,
+  Checkbox,
+  Collapsible,
   ConfirmDialog,
   Drawer,
   EmptyState,
   IconButton,
   InlineAlert,
+  Input,
   Metric,
   MetricGroup,
   PageHeader,
   Segmented,
+  Select,
+  Skeleton,
   StatusDot,
+  Tooltip,
+  useEmbedModeSafe,
 } from '../components/common';
 import type { DataTableColumn, DataTableRowGroup, SortState } from '../components/common';
 import { DataTable } from '../components/common';
 import { ActionMenu } from '../components/common/ActionMenu';
 import { PortfolioSignalBadge } from '../components/decision-signals/DecisionSignalDisplay';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 import { formatUiText } from '../i18n/uiText';
 import { PORTFOLIO_PAGE_TEXT, PORTFOLIO_TEXT } from '../locales/featureText';
-import { PORTFOLIO_W09_TEXT } from '../locales/portfolioText';
+import { PORTFOLIO_W09_TEXT, PORTFOLIO_W10_TEXT } from '../locales/portfolioText';
 import { currencyUnitLabel, formatMoneyValue, formatNumber, formatPercent, NO_VALUE } from '../utils/format';
-import type { FxRefreshFeedback } from '../utils/portfolioFormat';
+import type { FxRefreshFeedback, PendingEntry, PendingTone, PortfolioEntryParam } from '../utils/portfolioFormat';
 import {
   buildFxRefreshFeedback,
-  formatBrokerLabel,
+  computeTradeAmount,
+  formatBrokerOptionLabel,
   formatCashDirectionLabel,
   formatCorporateActionLabel,
+  formatLossPct,
   formatMoney,
   formatPct,
+  formatPendingGroupLabel,
   formatPositionMoney,
   formatPositionPrice,
   formatSideLabel,
   getCsvCommitVariant,
   getCsvParseVariant,
+  getFxBadge,
   getFxRefreshFeedbackVariant,
   getPositionPriceLabel,
   getTodayIso,
   hasPositionPrice,
+  mergePendingBySymbol,
+  parsePortfolioEntryParam,
+  removeSearchParam,
+  shortAccountName,
+  sortPendingBySeverity,
+  splitPendingRows,
 } from '../utils/portfolioFormat';
 import type { HoldingGroup, HoldingRow, HoldingSortKey } from '../utils/portfolioHoldings';
 import {
@@ -102,10 +122,26 @@ type EntryKind = EventType;
 type PendingItem = {
   key: string;
   label: string;
-  tone: 'danger' | 'warning';
+  tone: PendingTone;
   rowKey?: string;
+  /** Accounts behind this row; shown in small text when the view spans several accounts. */
+  accountNames?: string[];
   action?: { label: string; onClick: () => void };
 };
+
+const PENDING_VISIBLE_LIMIT = 5;
+/** Same breakpoint PageHeader uses for its compact layout. */
+const PORTFOLIO_NARROW_QUERY = '(max-width: 767.98px)';
+const PORTFOLIO_FILTER_CLASS =
+  'input-surface input-focus-glow h-8 w-full rounded-[var(--radius-control)] border bg-transparent px-3 text-xs transition-all focus:outline-none';
+const PORTFOLIO_FILTER_SELECT_CLASS = `${PORTFOLIO_FILTER_CLASS} appearance-none pr-8`;
+
+type RouterNavigator = { replace: (to: { pathname: string; search: string; hash: string }) => void };
+
+/** Current search string without requiring a Router (unit tests render the page bare). */
+function readLocationSearch(locationContext: { location?: { search?: string } } | null): string {
+  return locationContext?.location?.search ?? (typeof window !== 'undefined' ? window.location.search : '');
+}
 
 function buildSnapshotQuery(accountId: number | undefined, costMethod: PortfolioCostMethod) {
   return {
@@ -576,11 +612,8 @@ function buildPortfolioRiskFlags(
   const sectorConcentration = risk?.sectorConcentration;
   const topClassifiedSector = getClassifiedSectorRows(risk)[0];
   const drawdown = risk?.drawdown;
-  const stopLoss = risk?.stopLoss;
-  const decisionSignalRisk = risk?.decisionSignalRisk;
   const availability = getPortfolioRiskAvailability(risk, snapshot);
   const snapshotAvailable = snapshot !== null;
-  const defensiveSignalCount = availability.decisionSignalRisk ? (decisionSignalRisk?.total ?? 0) : 0;
 
   return [
     {
@@ -605,23 +638,6 @@ function buildPortfolioRiskFlags(
       tone: availability.drawdown ? (drawdown?.alert ? 'danger' : 'success') : 'neutral',
     },
     {
-      key: 'stop-loss',
-      label: text.stopLoss,
-      value: availability.stopLoss ? String(stopLoss?.triggeredCount ?? 0) : NO_VALUE,
-      // The backend's nearCount includes triggered holdings; show only the not-yet-triggered remainder.
-      detail: availability.stopLoss
-        ? `${text.triggered} ${stopLoss?.triggeredCount ?? 0} · ${text.near} ${Math.max(0, (stopLoss?.nearCount ?? 0) - (stopLoss?.triggeredCount ?? 0))}`
-        : text.unavailable,
-      tone: availability.stopLoss ? (stopLoss?.nearAlert ? 'danger' : 'success') : 'neutral',
-    },
-    {
-      key: 'ai-signal',
-      label: text.aiSignal,
-      value: availability.decisionSignalRisk ? String(defensiveSignalCount) : NO_VALUE,
-      detail: availability.decisionSignalRisk ? `${text.active}: ${defensiveSignalCount}` : text.unavailable,
-      tone: availability.decisionSignalRisk ? (defensiveSignalCount > 0 ? 'warning' : 'success') : 'neutral',
-    },
-    {
       key: 'price-quality',
       label: text.priceQuality,
       value: snapshotAvailable ? String(priceIssueCount) : NO_VALUE,
@@ -642,22 +658,23 @@ function riskFlagBadgeVariant(tone: PortfolioRiskFlagTone): 'success' | 'warning
   return 'default';
 }
 
-const PortfolioRiskFlagCard: React.FC<{
+// Available flags render as compact chips; data-flag-* lets tests and styles read the state.
+const PortfolioRiskFlagChip: React.FC<{
   flag: PortfolioRiskFlag;
   text: RiskDashboardText;
 }> = ({ flag, text }) => (
-  <div className="rounded-xl border border-border/70 bg-surface/55 px-3 py-2.5">
-    <div className="flex min-w-0 items-center justify-between gap-2">
-      <div className="flex min-w-0 items-center gap-2">
-        <StatusDot tone={flag.tone} className="h-2 w-2" />
-        <span className="truncate text-sm font-semibold text-foreground">{flag.label}</span>
-      </div>
-      <Badge variant={riskFlagBadgeVariant(flag.tone)}>
-        {flag.tone === 'success' ? text.stable : flag.tone === 'neutral' ? text.unavailable : text.active}
-      </Badge>
-    </div>
-    <div className="mt-2 text-lg font-semibold text-foreground">{flag.value}</div>
-    <div className="mt-1 truncate text-xs text-secondary">{flag.detail}</div>
+  <div
+    data-flag-key={flag.key}
+    data-flag-state={flag.tone}
+    className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-border/70 bg-surface/55 px-3 py-1.5 text-xs"
+  >
+    <StatusDot tone={flag.tone} className="h-2 w-2 shrink-0" />
+    <span className="shrink-0 font-semibold text-foreground">{flag.label}</span>
+    <span className="shrink-0 tabular-nums text-foreground">{flag.value}</span>
+    <span className="min-w-0 truncate text-secondary">{flag.detail}</span>
+    {flag.tone === 'success' ? null : (
+      <Badge variant={riskFlagBadgeVariant(flag.tone)} className="shrink-0">{text.active}</Badge>
+    )}
   </div>
 );
 
@@ -671,9 +688,7 @@ const PortfolioExposureList: React.FC<{
   <div className="rounded-xl border border-border/70 bg-surface/45 p-3">
     <h3 className="text-sm font-semibold text-foreground">{title}</h3>
     {rows.length === 0 ? (
-      <div className="mt-3 rounded-lg border border-dashed border-border px-3 py-6 text-center text-xs text-secondary">
-        {emptyLabel}
-      </div>
+      <p className="mt-2 text-xs text-muted-text">{emptyLabel}</p>
     ) : (
       <div className="mt-3 space-y-3">
         {rows.map((row) => (
@@ -799,6 +814,17 @@ const PortfolioPage: React.FC = () => {
   const pageText = PORTFOLIO_PAGE_TEXT[language];
   const riskDashboardText = PORTFOLIO_RISK_DASHBOARD_TEXT[language];
   const w09Text = PORTFOLIO_W09_TEXT[language];
+  const w10Text = PORTFOLIO_W10_TEXT[language];
+  const embedded = useEmbedModeSafe();
+  const narrow = useMediaQuery(PORTFOLIO_NARROW_QUERY);
+  const locationContext = useContext(UNSAFE_LocationContext) as {
+    location?: { pathname: string; search: string; hash: string };
+  } | null;
+  const navigationContext = useContext(UNSAFE_NavigationContext) as { navigator?: RouterNavigator } | null;
+  // `?entry=` deep link (iOS I07): read once on mount; the matching drawer starts open.
+  const [deepLinkEntry, setDeepLinkEntry] = useState<PortfolioEntryParam | null>(
+    () => parsePortfolioEntryParam(readLocationSearch(locationContext)),
+  );
   const decisionActionLabels = useMemo(() => buildDecisionActionLabelMap(t), [t]);
 
   // Set page title
@@ -808,7 +834,7 @@ const PortfolioPage: React.FC = () => {
 
   const [accounts, setAccounts] = useState<PortfolioAccountItem[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<AccountOption>('all');
-  const [showCreateAccount, setShowCreateAccount] = useState(false);
+  const [showCreateAccount, setShowCreateAccount] = useState(deepLinkEntry === 'account');
   const [accountCreating, setAccountCreating] = useState(false);
   const [accountCreateError, setAccountCreateError] = useState<string | null>(null);
   const [accountCreateSuccess, setAccountCreateSuccess] = useState<string | null>(null);
@@ -835,9 +861,9 @@ const PortfolioPage: React.FC = () => {
   const [positionAnalysisLoadingKey, setPositionAnalysisLoadingKey] = useState<string | null>(null);
   const [positionAnalysisMessage, setPositionAnalysisMessage] = useState<string | null>(null);
 
-  const [entryOpen, setEntryOpen] = useState(false);
-  const [entryKind, setEntryKind] = useState<EntryKind>('trade');
-  const [importOpen, setImportOpen] = useState(false);
+  const [entryOpen, setEntryOpen] = useState(deepLinkEntry === 'trade' || deepLinkEntry === 'cash');
+  const [entryKind, setEntryKind] = useState<EntryKind>(deepLinkEntry === 'cash' ? 'cash' : 'trade');
+  const [importOpen, setImportOpen] = useState(deepLinkEntry === 'import');
   const [entryAccountId, setEntryAccountId] = useState<number | null>(null);
   const [holdingSort, setHoldingSort] = useState<SortState>({ key: 'marketValue', direction: 'desc' });
   const [highlightedRowKey, setHighlightedRowKey] = useState<string | null>(null);
@@ -853,7 +879,8 @@ const PortfolioPage: React.FC = () => {
   const [csvCommitResult, setCsvCommitResult] = useState<PortfolioImportCommitResponse | null>(null);
   const [pasteText, setPasteText] = useState('');
   const [pasteTradeDate, setPasteTradeDate] = useState(getTodayIso());
-  const [pasteDryRun, setPasteDryRun] = useState(false);
+  // Both import sections default to a dry run; writing is an explicit opt-in.
+  const [pasteDryRun, setPasteDryRun] = useState(true);
   const [pasteParsing, setPasteParsing] = useState(false);
   const [pasteCommitting, setPasteCommitting] = useState(false);
   const [pasteParseResult, setPasteParseResult] = useState<PortfolioImportParseResponse | null>(null);
@@ -1091,6 +1118,24 @@ const PortfolioPage: React.FC = () => {
       setWriteWarning(null);
     }
   }, [writeBlocked]);
+
+  // Once the deep-linked drawer is closed, drop `entry` from the URL (replace, no history entry).
+  useEffect(() => {
+    if (!deepLinkEntry || entryOpen || importOpen || showCreateAccount) return;
+    const routerLocation = locationContext?.location;
+    const navigator = navigationContext?.navigator;
+    if (routerLocation && navigator) {
+      navigator.replace({
+        pathname: routerLocation.pathname,
+        search: removeSearchParam(routerLocation.search, 'entry'),
+        hash: routerLocation.hash,
+      });
+    } else if (typeof window !== 'undefined') {
+      const { pathname, search, hash } = window.location;
+      window.history.replaceState(window.history.state, '', `${pathname}${removeSearchParam(search, 'entry')}${hash}`);
+    }
+    setDeepLinkEntry(null);
+  }, [deepLinkEntry, entryOpen, importOpen, showCreateAccount, locationContext, navigationContext]);
 
   const positionRows: FlatPosition[] = useMemo(() => {
     if (!snapshot) return [];
@@ -1697,60 +1742,81 @@ const PortfolioPage: React.FC = () => {
     holdingRows.find((row) => areStockCodesEquivalent(row.symbol, symbol))?.key
   );
 
-  // 待處理只列異常；沒有就整區不顯示。
-  const pendingItems: PendingItem[] = [];
+  // Pending lists anomalies only (hidden when empty): one row per holding, most severe first.
+  const accountNameById = new Map((snapshot?.accounts ?? []).map((account) => [account.accountId, account.accountName]));
+  const holdingNameOf = (symbol: string): string | null => (
+    holdingRows.find((row) => areStockCodesEquivalent(row.symbol, symbol))?.name || null
+  );
+  const pendingEntries: PendingEntry[] = [];
   if (riskAvailability.stopLoss) {
     for (const item of risk?.stopLoss?.items ?? []) {
-      pendingItems.push({
-        key: `stop-${item.accountId}-${item.symbol}`,
-        label: formatUiText(item.isTriggered ? pageText.pendingStopTriggered : pageText.pendingStopNear, {
-          symbol: item.symbol,
-          pct: formatPct(item.lossPct),
-        }),
+      pendingEntries.push({
+        symbol: item.symbol,
         tone: item.isTriggered ? 'danger' : 'warning',
+        text: formatUiText(item.isTriggered ? w10Text.pendingStopTriggered : w10Text.pendingStopNear, {
+          pct: formatLossPct(item.lossPct),
+        }),
+        name: holdingNameOf(item.symbol),
+        accountName: accountNameById.get(item.accountId) ?? null,
         rowKey: findRowKey(item.symbol),
       });
     }
   }
   if (riskAvailability.decisionSignalRisk) {
     for (const item of risk?.decisionSignalRisk?.items ?? []) {
-      pendingItems.push({
-        key: `signal-${item.accountId ?? 'all'}-${item.market}-${item.symbol}-${item.signal.id ?? item.signal.action}`,
-        label: `${item.symbol} · ${formatDecisionSignalRiskAction(item.signal)}`,
+      pendingEntries.push({
+        symbol: item.symbol,
         tone: 'warning',
+        text: formatUiText(w10Text.pendingAi, { action: formatDecisionSignalRiskAction(item.signal) }),
+        name: holdingNameOf(item.symbol),
+        accountName: item.accountId != null ? accountNameById.get(item.accountId) ?? null : null,
         rowKey: findRowKey(item.symbol),
       });
     }
   }
   for (const row of holdingRows) {
     if (!hasPositionPrice(row)) {
-      pendingItems.push({
-        key: `price-${row.key}`,
-        label: formatUiText(pageText.pendingMissingPrice, { symbol: row.symbol }),
+      pendingEntries.push({
+        symbol: row.symbol,
         tone: 'warning',
+        text: w10Text.pendingMissingPrice,
+        name: row.name || null,
         rowKey: row.key,
       });
     }
   }
-  for (const account of snapshot?.accounts ?? []) {
-    if (account.totalCash < 0) {
-      pendingItems.push({
-        key: `cash-${account.accountId}`,
-        label: formatUiText(pageText.pendingNegativeCash, {
-          account: account.accountName,
-          amount: formatMoney(account.totalCash, account.baseCurrency),
-        }),
-        tone: 'warning',
-        action: {
-          label: pageText.pendingBackfill,
-          onClick: () => {
-            setCashForm((prev) => ({ ...prev, direction: 'in' }));
-            openEntry('cash', account.accountId);
-          },
+  const pendingItems: PendingItem[] = mergePendingBySymbol(pendingEntries).map((group) => ({
+    key: group.key,
+    label: formatPendingGroupLabel(group),
+    tone: group.tone,
+    rowKey: group.rowKey,
+    accountNames: group.accountNames,
+  }));
+  // Every account with negative cash folds into one row; backfill opens the first one.
+  const negativeCashAccounts = (snapshot?.accounts ?? []).filter((account) => account.totalCash < 0);
+  if (negativeCashAccounts.length > 0) {
+    pendingItems.push({
+      key: 'negative-cash',
+      label: formatUiText(w10Text.pendingNegativeCash, {
+        accounts: negativeCashAccounts
+          .map((account) => formatUiText(w10Text.pendingCashAccount, {
+            account: account.accountName,
+            amount: formatMoney(account.totalCash, account.baseCurrency),
+          }))
+          .join('、'),
+      }),
+      tone: 'warning',
+      action: {
+        label: pageText.pendingBackfill,
+        onClick: () => {
+          setCashForm((prev) => ({ ...prev, direction: 'in' }));
+          openEntry('cash', negativeCashAccounts[0].accountId);
         },
-      });
-    }
+      },
+    });
   }
+  const sortedPendingItems = sortPendingBySeverity(pendingItems);
+  const { visible: visiblePendingItems, hidden: hiddenPendingItems } = splitPendingRows(sortedPendingItems, PENDING_VISIBLE_LIMIT);
 
   // 有幣別對查無匯率時，換算總額不能用。帶 displayCurrency 的快照只讀 consolidated*，不退回 CNY 彙總。
   const hasConsolidated = Boolean(snapshot?.displayCurrency);
@@ -2031,10 +2097,24 @@ const PortfolioPage: React.FC = () => {
     )
   );
 
+  // Desktop record cells: holding name over the code; the code stays its own node.
+  const recordSymbolCell = (symbol: string) => {
+    const name = holdingNameOf(symbol);
+    return (
+      <div className="min-w-0">
+        {name ? <div className="truncate text-foreground">{name}</div> : null}
+        <div className={cn('font-mono', name && 'text-[11px] text-secondary')}>{symbol}</div>
+      </div>
+    );
+  };
+  const sideBadge = (side: PortfolioSide) => (
+    <Badge variant={side === 'buy' ? 'info' : 'default'}>{formatSideLabel(side, language)}</Badge>
+  );
+
   const tradeColumns: DataTableColumn<PortfolioTradeListItem>[] = [
     { key: 'tradeDate', header: pageText.colDate, priority: 'primary' },
-    { key: 'side', header: pageText.colSide, render: (item) => formatSideLabel(item.side, language) },
-    { key: 'symbol', header: pageText.colSymbol, priority: 'primary', render: (item) => <span className="font-mono">{item.symbol}</span> },
+    { key: 'side', header: pageText.colSide, render: (item) => sideBadge(item.side) },
+    { key: 'symbol', header: pageText.colSymbol, priority: 'primary', render: (item) => recordSymbolCell(item.symbol) },
     { key: 'quantity', header: pageText.colQuantity, numeric: true, priority: 'primary', render: (item) => formatNumber(item.quantity) },
     { key: 'price', header: pageText.colTradePrice, numeric: true, render: (item) => formatMoney(item.price, item.currency) },
     { key: 'fee', header: pageText.colFee, numeric: true, render: (item) => formatNumber(item.fee + item.tax) },
@@ -2080,7 +2160,7 @@ const PortfolioPage: React.FC = () => {
   const corporateColumns: DataTableColumn<PortfolioCorporateActionListItem>[] = [
     { key: 'effectiveDate', header: pageText.colDate, priority: 'primary' },
     { key: 'actionType', header: pageText.colAction, priority: 'primary', render: (item) => formatCorporateActionLabel(item.actionType, language) },
-    { key: 'symbol', header: pageText.colSymbol, priority: 'primary', render: (item) => <span className="font-mono">{item.symbol}</span> },
+    { key: 'symbol', header: pageText.colSymbol, priority: 'primary', render: (item) => recordSymbolCell(item.symbol) },
     {
       key: 'detail',
       header: pageText.colDetail,
@@ -2104,9 +2184,7 @@ const PortfolioPage: React.FC = () => {
   ];
 
   // Trade/corporate records carry no name; borrow it from the matching holding when there is one.
-  const holdingNameFor = (symbol: string): string | null => (
-    holdingRows.find((row) => areStockCodesEquivalent(row.symbol, symbol))?.name || null
-  );
+  const holdingNameFor = holdingNameOf;
 
   // 手機紀錄卡兩行：代號＋名稱 …… 金額；日期 · 類型 Badge …… 數量或幣別。
   const recordMobileCard = (
@@ -2150,7 +2228,7 @@ const PortfolioPage: React.FC = () => {
     symbolTitle(item.symbol),
     formatMoney(item.price, item.currency),
     item.tradeDate,
-    <Badge variant={item.side === 'buy' ? 'info' : 'default'}>{formatSideLabel(item.side, language)}</Badge>,
+    sideBadge(item.side),
     formatUiText(w09Text.shares, { quantity: formatNumber(item.quantity) }),
     tradeColumns.find((column) => column.key === 'delete')?.render?.(item),
   );
@@ -2182,6 +2260,8 @@ const PortfolioPage: React.FC = () => {
       className="border-none bg-transparent px-3 py-6 shadow-none"
     />
   );
+
+  const tradeAmount = computeTradeAmount(tradeForm.quantity, tradeForm.price);
 
   const entryAccountSelect = (
     <label className="block text-xs text-secondary">
@@ -2254,24 +2334,139 @@ const PortfolioPage: React.FC = () => {
     </>
   );
 
+  const costMethodMenuHeader = (
+    <div>
+      <p className="mb-1 text-xs text-secondary">{pageText.costMethodLabel}</p>
+      <Segmented
+        aria-label={pageText.costMethodLabel}
+        size="sm"
+        value={costMethod}
+        onChange={setCostMethod}
+        options={[
+          { value: 'fifo', label: text.fifo },
+          { value: 'avg', label: text.avg },
+        ]}
+      />
+    </div>
+  );
+  const accountMenuItems = [
+    {
+      key: 'create',
+      label: text.createAccount,
+      onSelect: () => {
+        setShowCreateAccount(true);
+        setAccountCreateError(null);
+        setAccountCreateSuccess(null);
+      },
+    },
+    {
+      key: 'delete',
+      label: accountDeleteLoading ? text.deletingAccount : text.deleteAccount,
+      disabled: !canDeleteSelectedAccount,
+      danger: true,
+      onSelect: openAccountDeleteDialog,
+    },
+  ];
+  // Phones: record / import / refresh move into the ⋯ menu so the header stays one row.
+  const narrowMenuItems = [
+    { key: 'record', label: pageText.recordEntry, disabled: !hasAccounts, onSelect: () => openEntry('trade') },
+    { key: 'import', label: pageText.importEntry, disabled: !hasAccounts, onSelect: openImport },
+    {
+      key: 'refresh',
+      label: isLoading ? text.refreshing : text.refreshData,
+      disabled: isLoading || fxRefreshing,
+      onSelect: () => void handleRefresh(),
+    },
+    ...accountMenuItems,
+  ];
+  const accountSwitcher = hasAccounts ? (
+    <Segmented
+      aria-label={text.accountView}
+      // Phones: full-width row with short names so all accounts fit without a scrollbar.
+      className={narrow ? 'flex w-full [&>button]:flex-1 [&>button]:px-2' : 'overflow-x-auto'}
+      value={String(selectedAccount)}
+      onChange={(value) => setSelectedAccount(value === 'all' ? 'all' : Number(value))}
+      options={[
+        { value: 'all', label: narrow ? w10Text.allAccountsShort : text.allAccounts },
+        ...accounts.map((account) => ({
+          value: String(account.id),
+          label: narrow ? shortAccountName(account.name) : account.name,
+        })),
+      ]}
+    />
+  ) : null;
+
+  const fxBadge = getFxBadge(fxMissing, fxStale, language);
+  const fxStatusLoading = isLoading && snapshot === null;
+  const fxNotes = [
+    fxMissing ? text.fxMissingHint.replace('{pairs}', fxMissingPairs.join(', ')) : null,
+    snapshotQualityMessage ? `${text.snapshotPartialTitle}：${snapshotQualityMessage}` : null,
+  ].filter((note): note is string => Boolean(note));
+
+  // Embedded (iOS) and deep-linked into a drawer: the summary folds into one line.
+  const compactSummary = embedded && deepLinkEntry !== null;
+
+  const renderPendingRows = (items: PendingItem[]) => (
+    <ul className="divide-y divide-border/40">
+      {items.map((item) => (
+        <li key={item.key} className="flex items-center justify-between gap-3 py-1.5 text-sm">
+          <span className="flex min-w-0 items-center gap-2">
+            <StatusDot tone={item.tone} className="h-2 w-2 shrink-0" />
+            {item.rowKey ? (
+              <button
+                type="button"
+                className="min-w-0 cursor-pointer text-left hover:underline"
+                onClick={() => jumpToRow(item.rowKey as string)}
+              >
+                {item.label}
+              </button>
+            ) : (
+              <span className="min-w-0">{item.label}</span>
+            )}
+            {showAccountNames && item.accountNames && item.accountNames.length > 0 ? (
+              <span className="shrink-0 text-[11px] text-secondary">{item.accountNames.join('、')}</span>
+            ) : null}
+          </span>
+          {item.action ? (
+            <Button size="sm" variant="secondary" onClick={item.action.onClick}>{item.action.label}</Button>
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  );
+
+  const pendingSection = sortedPendingItems.length > 0 ? (
+    <section data-testid="portfolio-pending">
+      <Card padding="md">
+        <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+          <AlertTriangle className="h-4 w-4 text-warning" />
+          {pageText.sectionPending}
+        </h2>
+        {renderPendingRows(visiblePendingItems)}
+        {hiddenPendingItems.length > 0 ? (
+          <Collapsible
+            title={formatUiText(w10Text.pendingShowMore, { count: hiddenPendingItems.length })}
+            className="mt-2 rounded-xl shadow-none"
+          >
+            {renderPendingRows(hiddenPendingItems)}
+          </Collapsible>
+        ) : null}
+      </Card>
+    </section>
+  ) : null;
+
+  const availableRiskFlags = portfolioRiskFlags.filter((flag) => flag.tone !== 'neutral');
+  const unavailableRiskFlags = portfolioRiskFlags.filter((flag) => flag.tone === 'neutral');
+
   return (
-    <div className="portfolio-page min-h-screen space-y-4 p-4 md:p-6">
+    <AppPage className="portfolio-page">
       <PageHeader
         title={text.title}
-        actions={(
+        actions={narrow ? (
+          <ActionMenu label={pageText.more} header={costMethodMenuHeader} items={narrowMenuItems} />
+        ) : (
           <>
-            {hasAccounts ? (
-              <Segmented
-                aria-label={text.accountView}
-                className="overflow-x-auto"
-                value={String(selectedAccount)}
-                onChange={(value) => setSelectedAccount(value === 'all' ? 'all' : Number(value))}
-                options={[
-                  { value: 'all', label: text.allAccounts },
-                  ...accounts.map((account) => ({ value: String(account.id), label: account.name })),
-                ]}
-              />
-            ) : null}
+            {accountSwitcher}
             <Button onClick={() => openEntry('trade')} disabled={!hasAccounts}>{pageText.recordEntry}</Button>
             <Button variant="secondary" onClick={openImport} disabled={!hasAccounts}>{pageText.importEntry}</Button>
             <IconButton
@@ -2280,45 +2475,11 @@ const PortfolioPage: React.FC = () => {
               onClick={() => void handleRefresh()}
               disabled={isLoading || fxRefreshing}
             />
-            <ActionMenu
-              label={pageText.more}
-              header={(
-                <div>
-                  <p className="mb-1 text-xs text-secondary">{pageText.costMethodLabel}</p>
-                  <Segmented
-                    aria-label={pageText.costMethodLabel}
-                    size="sm"
-                    value={costMethod}
-                    onChange={setCostMethod}
-                    options={[
-                      { value: 'fifo', label: text.fifo },
-                      { value: 'avg', label: text.avg },
-                    ]}
-                  />
-                </div>
-              )}
-              items={[
-                {
-                  key: 'create',
-                  label: text.createAccount,
-                  onSelect: () => {
-                    setShowCreateAccount(true);
-                    setAccountCreateError(null);
-                    setAccountCreateSuccess(null);
-                  },
-                },
-                {
-                  key: 'delete',
-                  label: accountDeleteLoading ? text.deletingAccount : text.deleteAccount,
-                  disabled: !canDeleteSelectedAccount,
-                  danger: true,
-                  onSelect: openAccountDeleteDialog,
-                },
-              ]}
-            />
+            <ActionMenu label={pageText.more} header={costMethodMenuHeader} items={accountMenuItems} />
           </>
         )}
       />
+      {narrow ? accountSwitcher : null}
 
       {error && !entryOpen && !importOpen ? <ApiErrorAlert error={error} onDismiss={() => setError(null)} /> : null}
       {writeWarning ? (
@@ -2347,93 +2508,113 @@ const PortfolioPage: React.FC = () => {
         </Card>
       ) : null}
 
+      {/* Phones: pending comes before the summary (U5.9). */}
+      {narrow ? pendingSection : null}
+
       <section className="space-y-2" aria-label={pageText.metricTotalAssets}>
-        <MetricGroup columns={4}>
-          <Metric
-            hero
-            label={pageText.metricTotalAssets}
-            unit={metricUnitFor(metricTotal)}
-            value={amountText(metricTotal)}
-            hint={joinHints([
-              hasFunds && fundValue !== null
-                ? formatUiText(pageText.includesFunds, { amount: moneyLabel(fundValue, summaryCurrency) })
-                : fundsUnavailable && equityAmount !== null ? pageText.excludesFunds : undefined,
-              approxHint(totalAssets),
-            ])}
-          />
-          <Metric
-            label={dayLabel}
-            unit={metricUnitFor(metricDayValue)}
-            value={signedNode(metricDayValue)}
-            hint={joinHints([
-              quoteDateIsToday ? undefined : w09Text.marketClosed,
-              dayBreakdown,
-              fundsUnavailable && dayAmount !== null ? pageText.stocksOnly : undefined,
-              approxHint(dayAmount),
-            ])}
-          />
-          <Metric
-            label={pageText.metricUnrealized}
-            unit={metricUnitFor(metricUnrealizedValue)}
-            value={signedNode(metricUnrealizedValue)}
-            hint={approxHint(unrealizedAmount)}
-          />
-          <Metric
-            label={pageText.metricRealized}
-            unit={metricUnitFor(metricRealizedValue)}
-            value={signedNode(metricRealizedValue)}
-            hint={approxHint(realizedAmount)}
-          />
-          <Metric
-            label={pageText.metricMarketValue}
-            unit={metricUnitFor(metricMarketValue)}
-            value={amountText(metricMarketValue)}
-            hint={approxHint(marketValueAmount)}
-          />
-          <Metric
-            label={pageText.metricCash}
-            unit={metricUnitFor(metricCashValue)}
-            value={amountText(metricCashValue)}
-            hint={approxHint(cashAmount)}
-            // Hero takes two slots, so without the funds card the last row has one gap: let cash fill it.
-            className={showFundCard ? undefined : 'md:col-span-2'}
-          />
-          {showFundCard ? (
+        {compactSummary ? (
+          <p data-testid="portfolio-summary-compact" className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
+            <span>
+              <span className="text-secondary">{pageText.metricTotalAssets}</span>{' '}
+              <span className="font-semibold tabular-nums text-foreground">
+                {metricTotal === null ? amountText(metricTotal) : moneyLabel(metricTotal, metricCurrency)}
+              </span>
+            </span>
+            <span>
+              <span className="text-secondary">{dayLabel}</span>{' '}
+              <span className={cn('tabular-nums', metricDayValue !== null && marketToneClass(metricDayValue))}>
+                {metricDayValue === null ? amountText(metricDayValue) : moneyLabel(metricDayValue, metricCurrency, true)}
+              </span>
+            </span>
+          </p>
+        ) : (
+          <MetricGroup columns={4}>
             <Metric
-              label={pageText.metricFunds}
-              unit={fundValue === null ? undefined : currencyUnitLabel(summaryCurrency) || undefined}
-              value={fundValue === null ? NO_VALUE : moneyDigits(fundValue, summaryCurrency)}
-              hint={fundDay === null ? undefined : (
-                <span className={marketToneClass(fundDay)}>{moneyLabel(fundDay, summaryCurrency, true)}</span>
-              )}
+              hero
+              label={pageText.metricTotalAssets}
+              unit={metricUnitFor(metricTotal)}
+              value={amountText(metricTotal)}
+              hint={joinHints([
+                hasFunds && fundValue !== null
+                  ? formatUiText(pageText.includesFunds, { amount: moneyLabel(fundValue, summaryCurrency) })
+                  : fundsUnavailable && equityAmount !== null ? pageText.excludesFunds : undefined,
+                approxHint(totalAssets),
+              ])}
             />
-          ) : null}
-        </MetricGroup>
+            <Metric
+              label={dayLabel}
+              unit={metricUnitFor(metricDayValue)}
+              value={signedNode(metricDayValue)}
+              hint={joinHints([
+                quoteDateIsToday ? undefined : w09Text.marketClosed,
+                dayBreakdown,
+                fundsUnavailable && dayAmount !== null ? pageText.stocksOnly : undefined,
+                approxHint(dayAmount),
+              ])}
+            />
+            <Metric
+              label={pageText.metricUnrealized}
+              unit={metricUnitFor(metricUnrealizedValue)}
+              value={signedNode(metricUnrealizedValue)}
+              hint={approxHint(unrealizedAmount)}
+            />
+            <Metric
+              label={pageText.metricRealized}
+              unit={metricUnitFor(metricRealizedValue)}
+              value={signedNode(metricRealizedValue)}
+              hint={approxHint(realizedAmount)}
+            />
+            <Metric
+              label={pageText.metricMarketValue}
+              unit={metricUnitFor(metricMarketValue)}
+              value={amountText(metricMarketValue)}
+              hint={approxHint(marketValueAmount)}
+            />
+            <Metric
+              label={pageText.metricCash}
+              unit={metricUnitFor(metricCashValue)}
+              value={amountText(metricCashValue)}
+              hint={approxHint(cashAmount)}
+              // Hero takes two slots, so without the funds card the last row has one gap: let cash fill it.
+              className={showFundCard ? undefined : 'md:col-span-2'}
+            />
+            {showFundCard ? (
+              <Metric
+                label={pageText.metricFunds}
+                unit={fundValue === null ? undefined : currencyUnitLabel(summaryCurrency) || undefined}
+                value={fundValue === null ? NO_VALUE : moneyDigits(fundValue, summaryCurrency)}
+                hint={fundDay === null ? undefined : (
+                  <span className={marketToneClass(fundDay)}>{moneyLabel(fundDay, summaryCurrency, true)}</span>
+                )}
+              />
+            ) : null}
+          </MetricGroup>
+        )}
         <div className="flex flex-wrap items-center gap-2 text-xs text-secondary">
-          <span>{text.fxStatus}</span>
-          {fxMissing
-            ? <Badge variant="warning">{text.fxMissing}</Badge>
-            : fxStale === true
-              ? <Badge variant="warning">{text.stale}</Badge>
-              : fxStale === false
-                ? <Badge variant="success">{text.latest}</Badge>
-                : <Badge variant="default">{riskDashboardText.unavailable}</Badge>}
-          <button
-            type="button"
-            className="btn-secondary !px-3 !py-1 !text-xs shrink-0"
+          {fxStatusLoading ? (
+            <Skeleton className="h-5 w-20 rounded-full" />
+          ) : fxBadge ? (
+            <Badge variant={fxBadge.variant}>{fxBadge.label}</Badge>
+          ) : null}
+          {fxNotes.length > 0 ? (
+            <Tooltip
+              focusable
+              content={(
+                <span className="block whitespace-normal">
+                  {fxNotes.map((note) => <span key={note} className="block">{note}</span>)}
+                </span>
+              )}
+            >
+              <Info aria-label={w10Text.fxInfo} role="img" className="h-3.5 w-3.5 text-secondary" />
+            </Tooltip>
+          ) : null}
+          <IconButton
+            aria-label={fxRefreshing ? text.refreshing : text.refreshFx}
+            size="sm"
+            icon={<RefreshCw className={cn('h-3.5 w-3.5', fxRefreshing && 'animate-spin')} />}
             onClick={() => void handleRefreshFx()}
             disabled={!hasAccounts || isLoading || fxRefreshing}
-          >
-            {fxRefreshing ? text.refreshing : text.refreshFx}
-          </button>
-          {fxMissing ? <span>{text.fxMissingHint.replace('{pairs}', fxMissingPairs.join(', '))}</span> : null}
-          {snapshotQualityMessage ? (
-            <span>
-              <span className="font-medium">{text.snapshotPartialTitle}</span>
-              {'：'}
-              <span>{snapshotQualityMessage}</span>
-            </span>
-          ) : null}
+          />
         </div>
         {fxRefreshFeedback ? (
           <InlineAlert
@@ -2445,39 +2626,7 @@ const PortfolioPage: React.FC = () => {
         ) : null}
       </section>
 
-      {pendingItems.length > 0 ? (
-        <section data-testid="portfolio-pending">
-          <Card padding="md">
-            <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
-              <AlertTriangle className="h-4 w-4 text-warning" />
-              {pageText.sectionPending}
-            </h2>
-            <ul className="divide-y divide-border/40">
-              {pendingItems.map((item) => (
-                <li key={item.key} className="flex items-center justify-between gap-3 py-1.5 text-sm">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <StatusDot tone={item.tone} className="h-2 w-2 shrink-0" />
-                    {item.rowKey ? (
-                      <button
-                        type="button"
-                        className="min-w-0 cursor-pointer text-left hover:underline"
-                        onClick={() => jumpToRow(item.rowKey as string)}
-                      >
-                        {item.label}
-                      </button>
-                    ) : (
-                      <span className="min-w-0">{item.label}</span>
-                    )}
-                  </span>
-                  {item.action ? (
-                    <Button size="sm" variant="secondary" onClick={item.action.onClick}>{item.action.label}</Button>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </Card>
-        </section>
-      ) : null}
+      {narrow ? null : pendingSection}
 
       <section>
         <Card padding="md">
@@ -2538,33 +2687,25 @@ const PortfolioPage: React.FC = () => {
         </Card>
       </section>
 
-      {snapshotFailed || riskFailed || riskLoading ? null : (
+      {snapshotFailed || riskFailed || riskLoading || concentrationBarRows.length === 0 ? null : (
         <section>
           <Card padding="md">
             <h2 className="mb-3 text-sm font-semibold text-foreground">
               {concentrationMode === 'sector' ? text.sectorConcentration : text.positionConcentrationFallback}
             </h2>
-            {concentrationBarRows.length > 0 ? (
-              <ol className="space-y-2">
-                {concentrationBarRows.map((row) => (
-                  <li key={row.name}>
-                    <div className="flex items-center justify-between gap-3 text-xs">
-                      <span className="truncate text-foreground">{row.name}</span>
-                      <span className="tabular-nums text-secondary">{formatPct(row.value)}</span>
-                    </div>
-                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-border/60">
-                      <div className="h-full rounded-full bg-cyan" style={{ width: `${Math.min(100, Math.max(0, row.value))}%` }} />
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <EmptyState
-                title={text.noConcentrationTitle}
-                description={text.noConcentrationDescription}
-                className="border-none bg-transparent px-4 py-10 shadow-none"
-              />
-            )}
+            <ol className="space-y-2">
+              {concentrationBarRows.map((row) => (
+                <li key={row.name}>
+                  <div className="flex items-center justify-between gap-3 text-xs">
+                    <span className="truncate text-foreground">{row.name}</span>
+                    <span className="tabular-nums text-secondary">{formatPct(row.value)}</span>
+                  </div>
+                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-border/60">
+                    <div className="h-full rounded-full bg-cyan" style={{ width: `${Math.min(100, Math.max(0, row.value))}%` }} />
+                  </div>
+                </li>
+              ))}
+            </ol>
             <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-secondary">
               <div>{text.displayScope}: {concentrationMode === 'sector' ? text.sectorDimension : text.positionDimensionFallback}</div>
               <div>{text.sectorAlert}: {riskAvailability.sectorConcentration ? (risk?.sectorConcentration?.alert ? text.yes : text.no) : riskDashboardText.unavailable}</div>
@@ -2595,9 +2736,9 @@ const PortfolioPage: React.FC = () => {
               <Button size="sm" variant="secondary" onClick={() => void loadSnapshotAndRisk()}>{pageText.retry}</Button>
             </div>
           ) : riskLoading ? (
-            <div data-testid="portfolio-risk-skeleton" className="grid gap-2 md:grid-cols-2 xl:grid-cols-3" aria-hidden="true">
-              {Array.from({ length: 6 }, (_, index) => (
-                <div key={index} className="h-[5.5rem] animate-pulse rounded-xl bg-border/40" />
+            <div data-testid="portfolio-risk-skeleton" className="flex flex-wrap gap-2" aria-hidden="true">
+              {Array.from({ length: 4 }, (_, index) => (
+                <div key={index} className="h-8 w-40 animate-pulse rounded-xl bg-border/40" />
               ))}
             </div>
           ) : (
@@ -2607,11 +2748,24 @@ const PortfolioPage: React.FC = () => {
                   <AlertTriangle className="h-3.5 w-3.5 text-warning" />
                   {riskDashboardText.riskFlags}
                 </div>
-                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                  {portfolioRiskFlags.map((flag) => (
-                    <PortfolioRiskFlagCard key={flag.key} flag={flag} text={riskDashboardText} />
-                  ))}
-                </div>
+                {availableRiskFlags.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {availableRiskFlags.map((flag) => (
+                      <PortfolioRiskFlagChip key={flag.key} flag={flag} text={riskDashboardText} />
+                    ))}
+                  </div>
+                ) : null}
+                {unavailableRiskFlags.length > 0 ? (
+                  <p data-testid="portfolio-risk-unavailable" className="mt-2 text-xs text-muted-text">
+                    {w10Text.riskUnavailable}
+                    {unavailableRiskFlags.map((flag, index) => (
+                      <Fragment key={flag.key}>
+                        {index > 0 ? (language === 'en' ? ', ' : '、') : null}
+                        <span data-flag-key={flag.key} data-flag-state="unavailable">{flag.label}</span>
+                      </Fragment>
+                    ))}
+                  </p>
+                ) : null}
               </div>
               <div className="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-1">
                 <div className="mb-[-0.25rem] hidden items-center gap-2 text-xs font-semibold text-secondary xl:flex">
@@ -2664,21 +2818,21 @@ const PortfolioPage: React.FC = () => {
             />
           </div>
           <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-            <input aria-label={pageText.dateFrom} className={PORTFOLIO_INPUT_CLASS} type="date" value={eventDateFrom} onChange={(e) => setEventDateFrom(e.target.value)} />
-            <input aria-label={pageText.dateTo} className={PORTFOLIO_INPUT_CLASS} type="date" value={eventDateTo} onChange={(e) => setEventDateTo(e.target.value)} />
+            <input aria-label={pageText.dateFrom} className={PORTFOLIO_FILTER_CLASS} type="date" value={eventDateFrom} onChange={(e) => setEventDateFrom(e.target.value)} />
+            <input aria-label={pageText.dateTo} className={PORTFOLIO_FILTER_CLASS} type="date" value={eventDateTo} onChange={(e) => setEventDateTo(e.target.value)} />
             {eventType === 'trade' || eventType === 'corporate' ? (
-              <input className={PORTFOLIO_INPUT_CLASS} placeholder={pageText.filterSymbol} value={eventSymbol}
+              <input aria-label={pageText.filterSymbol} className={PORTFOLIO_FILTER_CLASS} placeholder={pageText.filterSymbol} value={eventSymbol}
                 onChange={(e) => setEventSymbol(e.target.value)} />
             ) : null}
             {eventType === 'trade' ? (
-              <select aria-label={pageText.sideAll} className={PORTFOLIO_SELECT_CLASS} value={eventSide} onChange={(e) => setEventSide(e.target.value as '' | PortfolioSide)}>
+              <select aria-label={pageText.sideAll} className={PORTFOLIO_FILTER_SELECT_CLASS} value={eventSide} onChange={(e) => setEventSide(e.target.value as '' | PortfolioSide)}>
                 <option value="">{pageText.sideAll}</option>
                 <option value="buy">{pageText.buy}</option>
                 <option value="sell">{pageText.sell}</option>
               </select>
             ) : null}
             {eventType === 'cash' ? (
-              <select aria-label={pageText.directionAll} className={PORTFOLIO_SELECT_CLASS} value={eventDirection}
+              <select aria-label={pageText.directionAll} className={PORTFOLIO_FILTER_SELECT_CLASS} value={eventDirection}
                 onChange={(e) => setEventDirection(e.target.value as '' | PortfolioCashDirection)}>
                 <option value="">{pageText.directionAll}</option>
                 <option value="in">{pageText.cashIn}</option>
@@ -2686,7 +2840,7 @@ const PortfolioPage: React.FC = () => {
               </select>
             ) : null}
             {eventType === 'corporate' ? (
-              <select aria-label={pageText.actionAll} className={PORTFOLIO_SELECT_CLASS} value={eventActionType}
+              <select aria-label={pageText.actionAll} className={PORTFOLIO_FILTER_SELECT_CLASS} value={eventActionType}
                 onChange={(e) => setEventActionType(e.target.value as '' | PortfolioCorporateActionType)}>
                 <option value="">{pageText.actionAll}</option>
                 <option value="cash_dividend">{pageText.actionCashDividend}</option>
@@ -2718,7 +2872,7 @@ const PortfolioPage: React.FC = () => {
         </Card>
       </section>
 
-      <Drawer isOpen={entryOpen} onClose={() => setEntryOpen(false)} title={pageText.entryTitle}>
+      <Drawer isOpen={entryOpen} onClose={() => setEntryOpen(false)} title={pageText.entryTitle} width="max-w-md">
         <div className="space-y-3">
           {error ? <ApiErrorAlert error={error} onDismiss={() => setError(null)} /> : null}
           {entryAccountSelect}
@@ -2733,31 +2887,78 @@ const PortfolioPage: React.FC = () => {
             ]}
           />
           {entryKind === 'trade' ? (
-            <form className="space-y-2" onSubmit={handleTradeSubmit}>
-              <input className={PORTFOLIO_INPUT_CLASS} placeholder={pageText.symbolPlaceholder} value={tradeForm.symbol}
-                onChange={(e) => setTradeForm((prev) => ({ ...prev, symbol: e.target.value }))} required />
+            <form className="space-y-3" onSubmit={handleTradeSubmit}>
+              <Input
+                label={w10Text.tradeSymbol}
+                placeholder={w10Text.tradeSymbolExample}
+                value={tradeForm.symbol}
+                onChange={(e) => setTradeForm((prev) => ({ ...prev, symbol: e.target.value }))}
+                required
+              />
               <div className="grid grid-cols-2 gap-2">
-                <input className={PORTFOLIO_INPUT_CLASS} type="date" value={tradeForm.tradeDate}
-                  onChange={(e) => setTradeForm((prev) => ({ ...prev, tradeDate: e.target.value }))} required />
-                <select className={PORTFOLIO_SELECT_CLASS} value={tradeForm.side}
-                  onChange={(e) => setTradeForm((prev) => ({ ...prev, side: e.target.value as PortfolioSide }))}>
-                  <option value="buy">{pageText.buy}</option>
-                  <option value="sell">{pageText.sell}</option>
-                </select>
+                <Input
+                  label={w10Text.tradeDate}
+                  type="date"
+                  value={tradeForm.tradeDate}
+                  onChange={(e) => setTradeForm((prev) => ({ ...prev, tradeDate: e.target.value }))}
+                  required
+                />
+                <Select
+                  label={w10Text.tradeSide}
+                  value={tradeForm.side}
+                  onChange={(value) => setTradeForm((prev) => ({ ...prev, side: value as PortfolioSide }))}
+                  options={[
+                    { value: 'buy', label: pageText.buy },
+                    { value: 'sell', label: pageText.sell },
+                  ]}
+                />
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <input className={PORTFOLIO_INPUT_CLASS} type="number" min="0" step="0.0001" placeholder={pageText.quantityRequired} value={tradeForm.quantity}
-                  onChange={(e) => setTradeForm((prev) => ({ ...prev, quantity: e.target.value }))} required />
-                <input className={PORTFOLIO_INPUT_CLASS} type="number" min="0" step="0.0001" placeholder={pageText.priceRequired} value={tradeForm.price}
-                  onChange={(e) => setTradeForm((prev) => ({ ...prev, price: e.target.value }))} required />
+                <Input
+                  label={w10Text.tradeQuantity}
+                  type="number"
+                  min="0"
+                  step="0.0001"
+                  value={tradeForm.quantity}
+                  onChange={(e) => setTradeForm((prev) => ({ ...prev, quantity: e.target.value }))}
+                  required
+                />
+                <Input
+                  label={writableAccount?.baseCurrency
+                    ? formatUiText(w10Text.tradePrice, { currency: writableAccount.baseCurrency })
+                    : w10Text.tradePriceBare}
+                  type="number"
+                  min="0"
+                  step="0.0001"
+                  value={tradeForm.price}
+                  onChange={(e) => setTradeForm((prev) => ({ ...prev, price: e.target.value }))}
+                  required
+                />
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <input className={PORTFOLIO_INPUT_CLASS} type="number" min="0" step="0.0001" placeholder={pageText.feeOptional} value={tradeForm.fee}
-                  onChange={(e) => setTradeForm((prev) => ({ ...prev, fee: e.target.value }))} />
-                <input className={PORTFOLIO_INPUT_CLASS} type="number" min="0" step="0.0001" placeholder={pageText.taxOptional} value={tradeForm.tax}
-                  onChange={(e) => setTradeForm((prev) => ({ ...prev, tax: e.target.value }))} />
+                <Input
+                  label={w10Text.tradeFee}
+                  type="number"
+                  min="0"
+                  step="0.0001"
+                  value={tradeForm.fee}
+                  onChange={(e) => setTradeForm((prev) => ({ ...prev, fee: e.target.value }))}
+                />
+                <Input
+                  label={w10Text.tradeTax}
+                  type="number"
+                  min="0"
+                  step="0.0001"
+                  value={tradeForm.tax}
+                  onChange={(e) => setTradeForm((prev) => ({ ...prev, tax: e.target.value }))}
+                />
               </div>
               <p className="text-xs text-secondary">{pageText.feeHint}</p>
+              {tradeAmount !== null ? (
+                <p data-testid="portfolio-trade-amount" className="text-sm font-medium tabular-nums text-foreground">
+                  {formatUiText(w10Text.tradeAmount, { amount: formatMoney(tradeAmount, writableAccount?.baseCurrency) })}
+                </p>
+              ) : null}
               <Button type="submit" className="w-full" disabled={!writableAccountId}>{pageText.submitTrade}</Button>
             </form>
           ) : entryKind === 'cash' ? (
@@ -2823,18 +3024,23 @@ const PortfolioPage: React.FC = () => {
               onChange={(e) => setPasteText(e.target.value)}
               aria-label={pageText.pasteLabel}
             />
-            <div className="grid grid-cols-2 gap-2">
-              <input type="date" className={PORTFOLIO_INPUT_CLASS} value={pasteTradeDate}
-                onChange={(e) => setPasteTradeDate(e.target.value)} aria-label={pageText.pasteDate} />
-              <button type="button" className="btn-secondary" disabled={!pasteParseResult?.missingCost?.length}
+            <div className="grid grid-cols-2 items-end gap-2">
+              <Input
+                label={pageText.pasteDate}
+                type="date"
+                value={pasteTradeDate}
+                onChange={(e) => setPasteTradeDate(e.target.value)}
+              />
+              <button type="button" className="btn-secondary h-9" disabled={!pasteParseResult?.missingCost?.length}
                 onClick={handlePasteToTemplate}>
                 {pageText.toTemplate}
               </button>
             </div>
-            <div className="flex items-center gap-2 text-xs text-secondary">
-              <input id="paste-dry-run" type="checkbox" checked={pasteDryRun} onChange={(e) => setPasteDryRun(e.target.checked)} />
-              <label htmlFor="paste-dry-run">{pageText.dryRun}</label>
-            </div>
+            <Checkbox
+              label={pageText.dryRun}
+              checked={pasteDryRun}
+              onChange={(e) => setPasteDryRun(e.target.checked)}
+            />
             <div className="flex gap-2">
               <button type="button" className="btn-secondary flex-1" disabled={!pasteText.trim() || pasteParsing}
                 onClick={() => void handleParsePaste()}>
@@ -2842,7 +3048,7 @@ const PortfolioPage: React.FC = () => {
               </button>
               <button type="button" className="btn-secondary flex-1"
                 disabled={!pasteText.trim() || !writableAccountId || pasteCommitting} onClick={() => void handleCommitPaste()}>
-                {pasteCommitting ? pageText.committing : pageText.commitImport}
+                {pasteCommitting ? pageText.committing : pasteDryRun ? w10Text.commitDry : w10Text.commitWrite}
               </button>
             </div>
             {pasteParseResult ? (
@@ -2880,7 +3086,7 @@ const PortfolioPage: React.FC = () => {
             ) : null}
           </div>
 
-          <h3 className="pt-2 text-sm font-semibold text-foreground">{pageText.csvTitle}</h3>
+          <Collapsible title={w10Text.csvSection} className="rounded-xl shadow-none">
           <div className="space-y-2">
             {brokerLoadWarning ? (
               <InlineAlert
@@ -2890,8 +3096,17 @@ const PortfolioPage: React.FC = () => {
               />
             ) : null}
             <div className="grid grid-cols-2 gap-2">
-              <select className={PORTFOLIO_SELECT_CLASS} value={selectedBroker} onChange={(e) => setSelectedBroker(e.target.value)}>
-                {brokers.map((item) => <option key={item.broker} value={item.broker}>{formatBrokerLabel(item.broker, item.displayName)}</option>)}
+              <select
+                aria-label={pageText.csvTitle}
+                className={PORTFOLIO_SELECT_CLASS}
+                value={selectedBroker}
+                onChange={(e) => setSelectedBroker(e.target.value)}
+              >
+                {brokers.map((item) => (
+                  <option key={item.broker} value={item.broker}>
+                    {formatBrokerOptionLabel(item.broker, item.displayName, language)}
+                  </option>
+                ))}
               </select>
               <label className={PORTFOLIO_FILE_PICKER_CLASS}>
                 {pageText.csvPick}
@@ -2899,17 +3114,18 @@ const PortfolioPage: React.FC = () => {
                   onChange={(e) => setCsvFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)} />
               </label>
             </div>
-            <div className="flex items-center gap-2 text-xs text-secondary">
-              <input id="csv-dry-run" type="checkbox" checked={csvDryRun} onChange={(e) => setCsvDryRun(e.target.checked)} />
-              <label htmlFor="csv-dry-run">{pageText.dryRun}</label>
-            </div>
+            <Checkbox
+              label={pageText.dryRun}
+              checked={csvDryRun}
+              onChange={(e) => setCsvDryRun(e.target.checked)}
+            />
             <div className="flex gap-2">
               <button type="button" className="btn-secondary flex-1" disabled={!csvFile || csvParsing} onClick={() => void handleParseCsv()}>
                 {csvParsing ? pageText.parsing : pageText.parseFile}
               </button>
               <button type="button" className="btn-secondary flex-1"
                 disabled={!csvFile || !writableAccountId || csvCommitting} onClick={() => void handleCommitCsv()}>
-                {csvCommitting ? pageText.committing : pageText.commitImport}
+                {csvCommitting ? pageText.committing : csvDryRun ? w10Text.commitDry : w10Text.commitWrite}
               </button>
             </div>
             {csvParseResult ? (
@@ -2938,6 +3154,7 @@ const PortfolioPage: React.FC = () => {
               />
             ) : null}
           </div>
+          </Collapsible>
         </div>
       </Drawer>
 
@@ -2979,7 +3196,7 @@ const PortfolioPage: React.FC = () => {
           }
         }}
       />
-    </div>
+    </AppPage>
   );
 };
 

@@ -2,10 +2,11 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
-import RealtimeBoardPage from '../RealtimeBoardPage';
+import RealtimeBoardPage, { trendAxisBounds, trendPriceDigits } from '../RealtimeBoardPage';
 import { useMarketIndexStore } from '../../stores/marketIndexStore';
 
-const { getWatchlist, getSnapshot, listHoldings, getQuotes, getIndices, getDossierSummaries, getMarketStatus, getIntradayTrends, getHistoryList } = vi.hoisted(() => ({
+const { getWatchlist, getSnapshot, listHoldings, getQuotes, getIndices, getDossierSummaries, getMarketStatus, getIntradayTrends, getHistoryList, getFinancials } = vi.hoisted(() => ({
+  getFinancials: vi.fn(),
   getIntradayTrends: vi.fn(),
   getHistoryList: vi.fn(),
   getDossierSummaries: vi.fn(),
@@ -21,7 +22,7 @@ vi.mock('../../api/systemConfig', () => ({ systemConfigApi: { getWatchlist } }))
 vi.mock('../../api/portfolio', () => ({ portfolioApi: { getSnapshot } }));
 vi.mock('../../api/funds', () => ({ fundsApi: { listHoldings } }));
 vi.mock('../../api/stocks', () => ({
-  stocksApi: { getQuotes, getIndices, getIndicesSnapshot: (region: string) => Promise.resolve(getIndices(region)).then((items: unknown) => ({ items, marketPhase: null, marketOpen: null })), getFinancials: vi.fn().mockRejectedValue(new Error('no financials in this test')), getMarketStatus, getDossierSummaries, getIntradayTrends, getTrend: vi.fn().mockResolvedValue([]) },
+  stocksApi: { getQuotes, getIndices, getIndicesSnapshot: (region: string) => Promise.resolve(getIndices(region)).then((items: unknown) => ({ items, marketPhase: null, marketOpen: null })), getFinancials, ensureFinancialCommentary: vi.fn(), getMarketStatus, getDossierSummaries, getIntradayTrends, getTrend: vi.fn().mockResolvedValue([]) },
 }));
 vi.mock('../../api/history', () => ({ historyApi: { getList: getHistoryList } }));
 vi.mock('../../hooks/useStockIndex', () => ({ useStockIndex: () => ({ index: [] }) }));
@@ -76,6 +77,7 @@ describe('RealtimeBoardPage scope', () => {
     window.localStorage.clear();
     resetIndexStore();
     getIntradayTrends.mockResolvedValue([]);
+    getFinancials.mockRejectedValue(new Error('no financials in this test'));
     getHistoryList.mockResolvedValue({ items: [] });
     getWatchlist.mockResolvedValue(['2330.TW', '2454.TW']);
     getSnapshot.mockResolvedValue(snapshot);
@@ -222,6 +224,14 @@ describe('RealtimeBoardPage scope', () => {
     expect(screen.getByText('Holdings unavailable; showing watchlist only')).toBeInTheDocument();
   });
 
+  it('labels the fund return as a holding return with the NAV date, without up/down colour', async () => {
+    renderPage();
+    const held = await screen.findByText('Held +98.57%');
+    expect(held).toHaveClass('text-xs');
+    expect(held.className).not.toMatch(/market-up|market-down|text-red|text-emerald/);
+    expect(screen.getByText('NAV 10/21')).toBeInTheDocument();
+  });
+
   it('shows fund holdings outside the watchlist scope only', async () => {
     renderPage();
     expect(await screen.findByText('安聯台灣科技基金')).toBeInTheDocument();
@@ -244,7 +254,7 @@ describe('RealtimeBoardPage scope', () => {
     expect(getDossierSummaries.mock.calls.flat(2)).not.toContain('NVDA');
     await waitFor(() => expect(rowCodes()).toContain('2330.TW'));
     const row = rowFor('2330.TW');
-    await waitFor(() => expect(row.textContent).toContain('▲ BOS'));
+    await waitFor(() => expect(row.textContent).toContain('▲BOS'));
     // 距離用即時價 1000 算：960 / 1000 − 1
     expect(row.textContent).toContain('-4.0%');
   });
@@ -263,7 +273,7 @@ describe('RealtimeBoardPage scope', () => {
     renderPage();
     await waitFor(() => expect(rowCodes()).toEqual(['00631l.tw', '2454.TW']));
     for (const code of ['00631l.tw', '2454.TW']) {
-      await waitFor(() => expect(rowFor(code).textContent).toContain('▼ CHoCH'));
+      await waitFor(() => expect(rowFor(code).textContent).toContain('▼CHoCH'));
     }
   });
 
@@ -745,5 +755,99 @@ describe('RealtimeBoardPage scope', () => {
     expect(await screen.findByText('Loading 0/4')).toBeInTheDocument();
     await act(async () => pending.splice(0).forEach((f) => f()));
     await waitFor(() => expect(screen.getByText('Up 4 / Down 0 / Flat 0')).toBeInTheDocument());
+  });
+
+  const expandOnly2454 = async (quoteOver: Record<string, unknown> = {}) => {
+    getWatchlist.mockResolvedValue(['2454.TW', '2330.TW']);
+    getSnapshot.mockResolvedValue({ accounts: [] });
+    getQuotes.mockImplementation((codes: string[]) =>
+      Promise.resolve(codes.map((c) => ({ stockCode: c, quote: { ...quote(c, 100).quote, prevClose: 100, ...quoteOver } }))),
+    );
+    renderPage();
+    await waitFor(() => expect(rowFor('2454.TW').textContent).toContain('100'));
+    fireEvent.click(rowFor('2454.TW'));
+    return screen.findByTestId('board-expanded');
+  };
+
+  it('keeps the financials collapsed in the expanded row, showing only the title', async () => {
+    getFinancials.mockResolvedValue({
+      stockCode: '2454.TW', status: 'ok', template: 'general', currency: 'TWD', tradingCurrency: 'TWD', source: null,
+      periods: [{ key: '2026Q2', label: '2026 Q2', periodEnd: '2026-06-30', announceDate: null, announceDateKind: 'filed' }],
+      metrics: [{ key: 'revenue', label: '營收', kind: 'amount', unit: 'TWD', definition: '教學', points: [
+        { period: '2026Q2', value: 1.27e12, yoyPct: 1, qoqPct: 1, yoyPp: null, qoqPp: null, derived: false }] }],
+      notApplicable: [], monthlyRevenue: [], limitations: [], isStale: false,
+      commentary: { status: 'disabled', highlights: [], headline: null },
+    });
+    const panel = await expandOnly2454();
+    const toggle = await within(panel).findByRole('button', { name: 'Financials & monthly revenue (2026 Q2)' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(within(panel).queryByText('營收')).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(within(panel).getByText('營收')).toBeInTheDocument();
+  });
+
+  it('hides the row-tail Analyze only on the expanded row and offers View report in the expanded actions', async () => {
+    getHistoryList.mockResolvedValue({ items: [{ id: 7 }] });
+    const panel = await expandOnly2454();
+    expect(within(rowFor('2454.TW')).queryByRole('button', { name: 'Analyze' })).not.toBeInTheDocument();
+    // reverse: other rows keep it
+    expect(within(rowFor('2330.TW')).getByRole('button', { name: 'Analyze' })).toBeInTheDocument();
+    expect(within(panel).queryByRole('button', { name: 'Full analysis' })).not.toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole('button', { name: 'View report' }));
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/?report=7'));
+  });
+
+  it('collapses the expanded row from the sticky button at its bottom', async () => {
+    const panel = await expandOnly2454();
+    const collapse = within(panel).getByTestId('board-expanded-collapse');
+    expect(collapse).toHaveClass('sticky', 'bottom-0', 'h-10', 'w-full', 'border-t');
+    fireEvent.click(collapse);
+    await waitFor(() => expect(screen.queryByTestId('board-expanded')).not.toBeInTheDocument());
+    expect(within(rowFor('2454.TW')).getByRole('button', { name: 'Analyze' })).toBeInTheDocument();
+  });
+
+  it('shows the limit distance as a small pill instead of 10px text', async () => {
+    getWatchlist.mockResolvedValue(['2454.TW']);
+    getSnapshot.mockResolvedValue({ accounts: [] });
+    getQuotes.mockResolvedValue([{ stockCode: '2454.TW', quote: { ...quote('2454.TW', 108).quote, limitUp: 110, limitDown: 90 } }]);
+    renderPage();
+    const pill = await within(await waitFor(() => rowFor('2454.TW'))).findByText(/1\.9%/);
+    expect(pill).toHaveClass('text-[11px]', 'font-medium', 'rounded-full');
+    expect(pill).not.toHaveClass('text-[10px]');
+  });
+});
+
+describe('trend chart axis', () => {
+  it('pulls the prev-close baseline inside the axis when prices sit entirely above it', () => {
+    const baseline = 100;
+    const [lo, hi] = trendAxisBounds(104, 110, baseline);
+    expect(lo).toBeLessThanOrEqual(baseline);
+    expect(hi).toBeGreaterThanOrEqual(baseline);
+    expect(hi).toBeGreaterThanOrEqual(110);
+  });
+
+  it('pulls the baseline inside when prices sit entirely below it', () => {
+    const baseline = 100;
+    const [lo, hi] = trendAxisBounds(90, 96, baseline);
+    expect(lo).toBeLessThanOrEqual(90);
+    expect(hi).toBeGreaterThanOrEqual(baseline);
+  });
+
+  it('fits the prices only when there is no baseline (month / year ranges)', () => {
+    const [lo, hi] = trendAxisBounds(90, 96, null);
+    expect(lo).toBeLessThanOrEqual(90);
+    expect(hi).toBeGreaterThanOrEqual(96);
+    expect(hi).toBeLessThan(100); // reverse: no phantom baseline stretching the axis
+  });
+
+  it('gives a flat series a non-zero band', () => {
+    const [lo, hi] = trendAxisBounds(50, 50, 50);
+    expect(hi).toBeGreaterThan(lo);
+  });
+
+  it('picks tick decimals from the TW tick-size band', () => {
+    expect(trendPriceDigits(1000)).toBe(0);
+    expect(trendPriceDigits(120)).toBe(1);
+    expect(trendPriceDigits(18.35)).toBe(2);
   });
 });

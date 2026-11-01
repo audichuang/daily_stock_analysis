@@ -1,5 +1,6 @@
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { stocksApi } from '../../api/stocks';
 import { getParsedApiError } from '../../api/error';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
@@ -11,8 +12,10 @@ import type {
   StockFinancials,
 } from '../../types/financials';
 import { cn } from '../../utils/cn';
+import { formatUiText } from '../../i18n/uiText';
 import { formatFinancialAmount, formatChange, formatMetricValue, qoqOf, yoyOf } from '../../utils/financialFormat';
 import { REPORT_POLISH_TEXT } from '../../locales/reportText';
+import { BOARD_TEXT } from '../../locales/boardText';
 import { Card, Collapsible } from '../common';
 import { DashboardPanelHeader } from '../dashboard';
 
@@ -137,7 +140,8 @@ const MetricRow: React.FC<{
 };
 
 const MonthlyRevenue: React.FC<{ data: StockFinancials; highlights: FinancialHighlight[] }> = ({ data, highlights }) => {
-  const { t } = useUiLanguage();
+  const { t, language } = useUiLanguage();
+  const bt = BOARD_TEXT[language] ?? BOARD_TEXT.zh;
   const recent = [...data.monthlyRevenue].slice(-6).reverse();
   if (!recent.length) return null;
   return (
@@ -152,38 +156,45 @@ const MonthlyRevenue: React.FC<{ data: StockFinancials; highlights: FinancialHig
       {highlights.map((highlight) => (
         <div className="mb-2" key={highlight.period}><HighlightNote highlight={highlight} /></div>
       ))}
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[17rem] text-xs tabular-nums">
-          <thead>
-            <tr className="text-secondary-text">
-              <th className="py-1 pr-2 text-left font-normal">{t('financials.month')}</th>
-              <th className="py-1 pr-2 text-right font-normal">{t('financials.value')}</th>
-              <th className="py-1 pr-2 text-right font-normal">{t('financials.yoy')}</th>
-              <th className="py-1 text-right font-normal">{t('financials.mom')}</th>
+      {/* Below sm, YoY and MoM share one two-line column so the table fits a phone without side-scrolling. */}
+      <table className="w-full table-fixed text-xs tabular-nums" data-testid="financials-monthly-table">
+        <thead>
+          <tr className="text-secondary-text">
+            <th className="py-1 pr-2 text-left font-normal">{t('financials.month')}</th>
+            <th className="py-1 pr-2 text-right font-normal">{t('financials.value')}</th>
+            <th className="py-1 text-right font-normal sm:hidden">{bt.yoyMom}</th>
+            <th className="hidden py-1 pr-2 text-right font-normal sm:table-cell">{t('financials.yoy')}</th>
+            <th className="hidden py-1 text-right font-normal sm:table-cell">{t('financials.mom')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {recent.map((row) => (
+            <tr key={row.month} className="border-t border-border/40">
+              <td className="py-1 pr-2 text-left text-secondary-text">{row.month}</td>
+              <td className="py-1 pr-2 text-right text-foreground">{formatFinancialAmount(row.revenue, data.currency)}</td>
+              <td className="py-1 text-right leading-4 text-secondary-text sm:hidden">
+                <div>{formatChange(row.yoyPct)}</div>
+                <div>{formatChange(row.momPct)}</div>
+              </td>
+              <td className="hidden py-1 pr-2 text-right text-secondary-text sm:table-cell">{formatChange(row.yoyPct)}</td>
+              <td className="hidden py-1 text-right text-secondary-text sm:table-cell">{formatChange(row.momPct)}</td>
             </tr>
-          </thead>
-          <tbody>
-            {recent.map((row) => (
-              <tr key={row.month} className="border-t border-border/40">
-                <td className="py-1 pr-2 text-left text-secondary-text">{row.month}</td>
-                <td className="py-1 pr-2 text-right text-foreground">{formatFinancialAmount(row.revenue, data.currency)}</td>
-                <td className="py-1 pr-2 text-right text-secondary-text">{formatChange(row.yoyPct)}</td>
-                <td className="py-1 text-right text-secondary-text">{formatChange(row.momPct)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 };
 
 /**
  * 個股財報：數字先出，AI 導讀到了再補上。導讀失敗或關閉時，數字與固定教學照常顯示。
+ * embedded（盯盤展開列）：不套卡片外框、預設收合，只露標題與 AI 導讀一句。
  */
-export const FinancialsPanel: React.FC<{ stockCode: string }> = ({ stockCode }) => {
+export const FinancialsPanel: React.FC<{ stockCode: string; embedded?: boolean }> = ({ stockCode, embedded = false }) => {
   const { t, language } = useUiLanguage();
   const polish = REPORT_POLISH_TEXT[language] ?? REPORT_POLISH_TEXT['zh-TW'];
+  const bt = BOARD_TEXT[language] ?? BOARD_TEXT.zh;
+  const [bodyOpen, setBodyOpen] = useState(false);
   // 狀態全部綁請求的代號：切股後不符的舊值一律不顯示，A 的數字不會留在 B 的報告下。
   const [loaded, setLoaded] = useState<{ code: string; data: StockFinancials | null; error: string | null } | null>(null);
   const [commentaryState, setCommentaryState] = useState<{ code: string; value: FinancialCommentary } | null>(null);
@@ -245,13 +256,8 @@ export const FinancialsPanel: React.FC<{ stockCode: string }> = ({ stockCode }) 
     />
   );
 
-  return (
-    <Card variant="surface" padding="md" className="home-panel-card min-w-0" data-testid="financials-panel">
-      <DashboardPanelHeader
-        eyebrow={t('financials.title')}
-        title={latest ? t('financials.latest', { period: latest.label, end: latest.periodEnd }) : t('financials.title')}
-        className="mb-3"
-      />
+  const body = (
+    <>
       {stale ? <p className="text-sm text-secondary-text" role="status">{t('financials.loading')}</p> : null}
       {error ? <p className="text-sm text-danger" role="alert">{error}</p> : null}
       {current && current.status !== 'ok' ? (
@@ -314,6 +320,49 @@ export const FinancialsPanel: React.FC<{ stockCode: string }> = ({ stockCode }) 
           <p className="text-xs text-secondary-text">{t('financials.disclaimer')}</p>
         </div>
       ) : null}
+    </>
+  );
+
+  if (embedded) {
+    // Flat: no card chrome; a light frame only from md up, none on phones.
+    return (
+      <div className="min-w-0 md:rounded-[var(--radius-card)] md:border md:border-border/60" data-testid="financials-panel">
+        <button
+          type="button"
+          aria-expanded={bodyOpen}
+          onClick={(e) => {
+            e.stopPropagation();
+            setBodyOpen((v) => !v);
+          }}
+          className="flex w-full min-w-0 items-center justify-between gap-2 py-2 text-left md:px-3"
+        >
+          <span className="text-sm font-medium text-foreground">
+            {latest ? formatUiText(bt.financialsTitle, { period: latest.label }) : bt.financialsTitleBare}
+          </span>
+          <ChevronDown
+            aria-hidden="true"
+            className={cn('h-4 w-4 shrink-0 text-secondary-text transition-transform', bodyOpen && 'rotate-180')}
+          />
+        </button>
+        {!bodyOpen && showCommentary ? (
+          <p className="line-clamp-2 pb-2 text-xs leading-5 text-secondary-text md:px-3" data-testid="financials-teaser">
+            <span className={cn(AI_BADGE, 'mr-1.5 py-0')}>{t('financials.aiGuide')}</span>
+            {commentary?.headline}
+          </p>
+        ) : null}
+        {bodyOpen ? <div className="min-w-0 pb-3 md:px-3" data-testid="financials-body">{body}</div> : null}
+      </div>
+    );
+  }
+
+  return (
+    <Card variant="surface" padding="md" className="home-panel-card min-w-0" data-testid="financials-panel">
+      <DashboardPanelHeader
+        eyebrow={t('financials.title')}
+        title={latest ? t('financials.latest', { period: latest.label, end: latest.periodEnd }) : t('financials.title')}
+        className="mb-3"
+      />
+      {body}
     </Card>
   );
 };

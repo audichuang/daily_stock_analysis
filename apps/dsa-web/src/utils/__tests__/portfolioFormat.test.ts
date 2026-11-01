@@ -1,14 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildFxRefreshFeedback,
+  computeTradeAmount,
   formatBrokerLabel,
+  formatBrokerOptionLabel,
+  formatLossPct,
   formatMoney,
+  formatPendingGroupLabel,
   formatPositionMoney,
   formatPositionPrice,
   formatSignedPct,
   getCsvCommitVariant,
   getCsvParseVariant,
+  getFxBadge,
   getPositionPriceLabel,
+  mergePendingBySymbol,
+  parsePortfolioEntryParam,
+  removeSearchParam,
+  shortAccountName,
+  sortPendingBySeverity,
+  splitPendingRows,
 } from '../portfolioFormat';
 import type { PortfolioPositionItem } from '../../types/portfolio';
 
@@ -83,5 +94,74 @@ describe('portfolioFormat', () => {
       staleCount: 0,
       errorCount: 0,
     })).toMatchObject({ tone: 'success' });
+  });
+
+  it('merges pending entries of one stock code into one row and keeps the worst severity', () => {
+    const groups = mergePendingBySymbol([
+      { symbol: '2303.TW', tone: 'danger', text: '停損已觸發 −35.4%', name: '聯電', accountName: '美好台股', rowKey: 'tw:2303' },
+      { symbol: '2330.TW', tone: 'warning', text: '缺報價' },
+      { symbol: '2303.tw', tone: 'warning', text: 'AI 減碼', accountName: '國泰台股' },
+    ]);
+    expect(groups).toHaveLength(2);
+    expect(groups[0]).toMatchObject({ tone: 'danger', rowKey: 'tw:2303', accountNames: ['美好台股', '國泰台股'] });
+    expect(formatPendingGroupLabel(groups[0])).toBe('聯電 2303.TW · 停損已觸發 −35.4% · AI 減碼');
+    expect(formatPendingGroupLabel(groups[1])).toBe('2330.TW · 缺報價');
+  });
+
+  it('sorts pending rows by severity without reordering equals and splits off the overflow', () => {
+    const rows = [
+      { key: 'a', tone: 'warning' as const },
+      { key: 'b', tone: 'danger' as const },
+      { key: 'c', tone: 'warning' as const },
+    ];
+    expect(sortPendingBySeverity(rows).map((row) => row.key)).toEqual(['b', 'a', 'c']);
+    const { visible, hidden } = splitPendingRows([1, 2, 3, 4, 5, 6, 7], 5);
+    expect(visible).toEqual([1, 2, 3, 4, 5]);
+    expect(hidden).toEqual([6, 7]);
+  });
+
+  it('formats loss percentages as negative with one decimal', () => {
+    expect(formatLossPct(35.42)).toBe('\u221235.4%');
+    expect(formatLossPct(-12)).toBe('\u221212.0%');
+    expect(formatLossPct(null)).toBe('—');
+  });
+
+  it('shortens account names by trailing market words only', () => {
+    expect(shortAccountName('美好台股')).toBe('美好');
+    expect(shortAccountName('國泰台股')).toBe('國泰');
+    expect(shortAccountName('永豐複委託')).toBe('永豐');
+    expect(shortAccountName('Main')).toBe('Main');
+    // Never shortens a name down to nothing.
+    expect(shortAccountName('台股')).toBe('台股');
+  });
+
+  it('labels known brokers in the UI language instead of the API name', () => {
+    expect(formatBrokerOptionLabel('huatai', '华泰', 'zh-TW')).toBe('華泰');
+    expect(formatBrokerOptionLabel('huatai', '华泰', 'en')).toBe('Huatai');
+    expect(formatBrokerOptionLabel('custom', ' 自訂 ', 'zh-TW')).toBe('自訂');
+    expect(formatBrokerOptionLabel('custom', undefined, 'zh-TW')).toBe('custom');
+  });
+
+  it('builds the FX badge from missing / stale / fresh state', () => {
+    expect(getFxBadge(true, false, 'zh-TW')).toEqual({ variant: 'warning', label: '缺匯率' });
+    expect(getFxBadge(false, true, 'zh-TW')).toEqual({ variant: 'warning', label: '匯率 過期' });
+    expect(getFxBadge(false, false, 'zh-TW')).toEqual({ variant: 'success', label: '匯率 今日' });
+    expect(getFxBadge(false, undefined, 'zh-TW')).toBeNull();
+  });
+
+  it('previews the trade amount only for positive quantity and price', () => {
+    expect(computeTradeAmount('1000', '52.5')).toBe(52500);
+    expect(computeTradeAmount('', '52.5')).toBeNull();
+    expect(computeTradeAmount('10', '0')).toBeNull();
+    expect(computeTradeAmount('abc', '1')).toBeNull();
+  });
+
+  it('reads and removes the entry deep-link parameter', () => {
+    expect(parsePortfolioEntryParam('?entry=import')).toBe('import');
+    expect(parsePortfolioEntryParam('?embed=ios&entry=cash')).toBe('cash');
+    expect(parsePortfolioEntryParam('?entry=delete')).toBeNull();
+    expect(parsePortfolioEntryParam('')).toBeNull();
+    expect(removeSearchParam('?embed=ios&entry=trade', 'entry')).toBe('?embed=ios');
+    expect(removeSearchParam('?entry=trade', 'entry')).toBe('');
   });
 });

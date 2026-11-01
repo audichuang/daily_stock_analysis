@@ -134,6 +134,8 @@ const isDesktopViewport = () =>
 const CHUNK = 8; // 每批並發請求的代號數：分批更新，慢的股票不擋快的
 
 const changeClass = (value?: number | null): string => marketToneClass(value);
+// Small pill for the limit-distance and VWAP-deviation readings under a price.
+const PILL_CLASS = 'mt-0.5 inline-flex whitespace-nowrap rounded-full bg-hover px-1.5 text-[11px] font-medium leading-4';
 
 const signedNumber = (value?: number | null, digits?: number): string => {
   const text = formatNumber(value, digits);
@@ -177,6 +179,31 @@ const formatTrendLabel = (raw: string, range: TrendRange): string => {
   return range === 'day' ? `${date} ${_pad(d.getHours())}:${_pad(d.getMinutes())}` : date;
 };
 
+const TREND_TICK_COUNT = 5;
+const TREND_PAD_RATIO = 0.05; // headroom so the line and the prev-close label do not sit on the frame
+
+/**
+ * Y-axis bounds for the trend chart: always include the baseline (prev close) so its dashed line is on screen,
+ * then pad a little. A flat series gets a band around its single value instead of a zero-height axis.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- pure helper exported for unit tests
+export function trendAxisBounds(dataMin: number, dataMax: number, baseline: number | null | undefined): [number, number] {
+  const lo = baseline != null && Number.isFinite(baseline) ? Math.min(dataMin, baseline) : dataMin;
+  const hi = baseline != null && Number.isFinite(baseline) ? Math.max(dataMax, baseline) : dataMax;
+  const span = hi - lo;
+  const pad = span > 0 ? span * TREND_PAD_RATIO : Math.abs(hi) * 0.005 || 1;
+  return [lo - pad, hi + pad];
+}
+
+/** Decimal places for price ticks, following the TW tick-size bands (≥500 whole, ≥50 one decimal, else two). */
+// eslint-disable-next-line react-refresh/only-export-components -- pure helper exported for unit tests
+export function trendPriceDigits(reference: number | null | undefined): number {
+  const ref = Math.abs(reference ?? 0);
+  if (ref >= 500) return 0;
+  if (ref >= 50) return 1;
+  return 2;
+}
+
 // 展開區左欄：預設當日走勢，有昨收就畫基準線，線色也以昨收為準
 const TrendChart: React.FC<{ code: string; prevClose?: number | null }> = ({ code, prevClose }) => {
   const { t } = useUiLanguage();
@@ -205,6 +232,10 @@ const TrendChart: React.FC<{ code: string; prevClose?: number | null }> = ({ cod
   const ranges: TrendRange[] = ['day', 'month', 'year'];
   const baseline = range === 'day' && prevClose ? prevClose : null;
   const up = points.length >= 1 && points[points.length - 1].price >= (baseline ?? points[0].price);
+  const digits = trendPriceDigits(baseline ?? points[points.length - 1]?.price);
+  // 'auto' would fit the prices only and recharts then discards the prev-close line once it falls outside
+  const prices = points.map((p) => p.price);
+  const domain = prices.length > 0 ? trendAxisBounds(Math.min(...prices), Math.max(...prices), baseline) : undefined;
 
   return (
     <div className="min-w-0 space-y-2 px-3 py-3">
@@ -245,14 +276,15 @@ const TrendChart: React.FC<{ code: string; prevClose?: number | null }> = ({ cod
               tickFormatter={(v) => formatTrendTick(String(v), range)}
             />
             <YAxis
-              domain={['auto', 'auto']}
+              domain={domain}
+              tickCount={TREND_TICK_COUNT}
               width={52}
               tick={{ fontSize: 11 }}
-              tickFormatter={(v) => Number(v).toFixed(1)}
+              tickFormatter={(v) => Number(v).toFixed(digits)}
             />
             <Tooltip
               labelFormatter={(label) => formatTrendLabel(String(label), range)}
-              formatter={(v) => [Number(v).toFixed(2), t('board.col.price')]}
+              formatter={(v) => [Number(v).toFixed(Math.max(digits, 2)), t('board.col.price')]}
               contentStyle={{
                 background: 'hsl(var(--popover))',
                 border: '1px solid hsl(var(--border))',
@@ -396,6 +428,12 @@ function mergeHoldings(accounts: PortfolioAccountSnapshot[]): Record<string, Hol
   }
   return merged;
 }
+
+// 2026-10-30 → 10/30; anything else passes through untouched
+const shortMonthDay = (date: string): string => {
+  const m = /^\d{4}-(\d{2})-(\d{2})/.exec(date);
+  return m ? `${Number(m[1])}/${Number(m[2])}` : date;
+};
 
 const formatClock = (iso: string): string => {
   const d = new Date(iso);
@@ -869,7 +907,7 @@ const RealtimeBoardPage: React.FC = () => {
             <>
               <div>{priceValue(row)}</div>
               {quoteStateNote(row)}
-              {li ? <div className={cn('text-[10px]', li.cls)}>{li.text}</div> : null}
+              {li ? <div><span className={cn(PILL_CLASS, li.cls)}>{li.text}</span></div> : null}
             </>
           );
         },
@@ -898,7 +936,7 @@ const RealtimeBoardPage: React.FC = () => {
           return (
             <>
               <div>{row.q?.averagePrice != null ? formatPrice(row.q.averagePrice, row.currency) : NO_VALUE}</div>
-              {deviation != null ? <div className={cn('text-[10px]', changeClass(deviation))}>{formatPercent(deviation)}</div> : null}
+              {deviation != null ? <div><span className={cn(PILL_CLASS, changeClass(deviation))}>{formatPercent(deviation)}</span></div> : null}
             </>
           );
         },
@@ -960,7 +998,8 @@ const RealtimeBoardPage: React.FC = () => {
         header: t('board.col.structure'),
         render: (row) => <BoardDossierCell summary={row.dossier} price={hasPrice(row.q) ? row.q.currentPrice : null} />,
       },
-      { key: 'action', header: '', align: 'right', render: analyzeButton },
+      // The expanded area has its own action row; the row-tail button would be a duplicate there.
+      { key: 'action', header: '', align: 'right', render: (row) => (expanded === row.code ? null : analyzeButton(row)) },
     );
     return columns;
   };
@@ -1006,13 +1045,15 @@ const RealtimeBoardPage: React.FC = () => {
     ] as Array<{ label: string; value: React.ReactNode } | null>).filter((c): c is { label: string; value: React.ReactNode } => c !== null);
     return (
       // 寬表橫捲時展開內容黏在左邊，不用橫滑整張表才找得到按鈕
-      <div data-testid="board-expanded" className="sticky left-0 w-[min(100%,calc(100vw-4rem))] bg-base/40">
+      <div data-testid="board-expanded" className="sticky left-0 w-[min(100%,calc(100vw-4rem))] border-y border-border/60 bg-elevated/30">
         <BoardDossierPanel
           code={row.code}
           name={row.name}
           summary={row.dossier}
           price={hasPrice(q) ? q.currentPrice : null}
           levelAlertsEnabled={levelAlertsEnabled}
+          onOpenReport={() => openAnalysis(row.code)}
+          onCreateAlert={() => navigate(`/alerts?new=1&target=${encodeURIComponent(row.code)}`)}
         />
         <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
           <TrendChart code={row.code} prevClose={q?.prevClose} />
@@ -1028,33 +1069,22 @@ const RealtimeBoardPage: React.FC = () => {
               </dl>
             ) : null}
             {q?.volumeRatio != null ? <div className="mt-2 text-[10px] text-secondary-text">{t('board.detail.volumeRatioHint')}</div> : null}
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  navigate(`/alerts?new=1&target=${encodeURIComponent(row.code)}`);
-                }}
-              >
-                {t('board.action.createAlert')}
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openAnalysis(row.code);
-                }}
-              >
-                {t('board.action.fullAnalysis')}
-              </Button>
-            </div>
           </div>
         </div>
         <div className="px-3 pb-3">
-          <FinancialsPanel stockCode={row.code} />
+          <FinancialsPanel stockCode={row.code} embedded />
         </div>
+        <button
+          type="button"
+          data-testid="board-expanded-collapse"
+          className="sticky bottom-0 h-10 w-full border-t border-border/60 bg-elevated/90 text-sm text-secondary-text backdrop-blur hover:text-foreground"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded(null);
+          }}
+        >
+          {bt.collapseRow} ▲
+        </button>
       </div>
     );
   };
@@ -1257,8 +1287,13 @@ const RealtimeBoardPage: React.FC = () => {
             >
               <span className="text-sm">{f.fundName}</span>
               <span className="text-base font-medium">{f.nav != null ? f.nav.toFixed(2) : '—'}</span>
-              <span className={cn('whitespace-nowrap text-xs', f.isStale ? 'text-warning' : 'text-secondary-text')}>{f.navDate ?? t('funds.noNav')}</span>
-              <span className={cn('text-sm', changeClass(f.pnlPct))}>{formatPercent(f.pnlPct)}</span>
+              <span className={cn('whitespace-nowrap text-xs', f.isStale ? 'text-warning' : 'text-secondary-text')}>
+                {f.navDate ? formatUiText(bt.fundNavDate, { date: shortMonthDay(f.navDate) }) : t('funds.noNav')}
+              </span>
+              {/* Holding return is cumulative, not today's move: plain text, no up/down colour */}
+              {f.pnlPct != null ? (
+                <span className="whitespace-nowrap text-xs text-secondary-text">{formatUiText(bt.fundHolding, { pct: formatPercent(f.pnlPct) })}</span>
+              ) : null}
             </button>
           ))}
         </div>
