@@ -49,6 +49,7 @@ import {
   formatCashDirectionLabel,
   formatCorporateActionLabel,
   formatLossPct,
+  formatAmount,
   formatMoney,
   formatPct,
   formatPendingGroupLabel,
@@ -158,11 +159,9 @@ function buildRiskQuery(accountId: number | undefined, costMethod: PortfolioCost
   return { accountId, costMethod, includeRealtime: false, displayCurrency: PORTFOLIO_DISPLAY_CURRENCY };
 }
 
-/** 金額帶正負號，損益與今日用。 */
+/** 金額帶正負號，損益與今日用；前綴 NT$／US$，TWD 不帶小數。 */
 function formatSignedMoney(value: number | null | undefined, currency?: string): string {
-  if (value == null || !Number.isFinite(value)) return NO_VALUE;
-  const sign = value > 0 ? '+' : '';
-  return `${currency ? `${currency} ` : ''}${sign}${formatNumber(value, 2)}`;
+  return formatAmount(value, currency, { signed: true });
 }
 
 type FlatPosition = PortfolioPositionItem & {
@@ -2046,7 +2045,7 @@ const PortfolioPage: React.FC = () => {
       rows: group.rows,
       summaryCells: {
         name: label,
-        marketValue: value.value === null ? NO_VALUE : formatMoney(value.value, value.currency),
+        marketValue: value.value === null ? NO_VALUE : formatAmount(value.value, value.currency),
         weight: group.weightPct === null ? NO_VALUE : formatPct(group.weightPct),
         pnl: (
           <div className={pnl.value === null ? 'text-secondary' : marketToneClass(pnl.value)}>
@@ -2058,7 +2057,7 @@ const PortfolioPage: React.FC = () => {
       mobileSummary: (
         <div className="flex items-center justify-between gap-3">
           <span>{label}</span>
-          <span className="tabular-nums">{value.value === null ? NO_VALUE : formatMoney(value.value, value.currency)}</span>
+          <span className="tabular-nums">{value.value === null ? NO_VALUE : formatAmount(value.value, value.currency)}</span>
         </div>
       ),
     };
@@ -2080,10 +2079,10 @@ const PortfolioPage: React.FC = () => {
           <span className="shrink-0 tabular-nums">{formatPositionMoney(row.marketValueBase, row)}</span>
         </div>
         <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-secondary">
-          <span className="min-w-0 truncate">
-            {row.name ? <span className="font-mono">{row.symbol}</span> : null}
-            {row.name ? ' · ' : null}
-            <span>{row.weightPct === null ? NO_VALUE : formatPct(row.weightPct)}</span>
+          <span className="flex min-w-0 items-center">
+            {row.name ? <span className="min-w-0 truncate font-mono">{row.symbol}</span> : null}
+            {row.name ? <span className="shrink-0">{'\u00a0·\u00a0'}</span> : null}
+            <span data-testid="holding-mobile-weight" className="shrink-0">{row.weightPct === null ? NO_VALUE : formatPct(row.weightPct)}</span>
           </span>
           <span className={cn('shrink-0 tabular-nums', hasPositionPrice(row) ? marketToneClass(row.unrealizedPnlBase) : 'text-secondary')}>
             {hasPositionPrice(row)
@@ -2467,6 +2466,20 @@ const PortfolioPage: React.FC = () => {
 
   const availableRiskFlags = portfolioRiskFlags.filter((flag) => flag.tone !== 'neutral');
   const unavailableRiskFlags = portfolioRiskFlags.filter((flag) => flag.tone === 'neutral');
+  // Both exposure breakdowns empty: no empty bordered boxes; unavailable exposure joins the grey
+  // "Unavailable:" line, an empty portfolio gets one grey line instead.
+  const exposureEmpty = marketExposureRows.length === 0 && currencyExposureRows.length === 0;
+  const exposureUnavailableMerged = exposureEmpty && exposureEmptyLabel === riskDashboardText.exposureUnavailable;
+  const unavailableRiskItems: Array<{ key: string; label: string; attr: 'flag' | 'exposure' }> = [
+    ...unavailableRiskFlags.map((flag) => ({ key: flag.key, label: flag.label, attr: 'flag' as const })),
+    ...(exposureUnavailableMerged
+      ? [
+        { key: 'market', label: riskDashboardText.marketExposure, attr: 'exposure' as const },
+        { key: 'currency', label: riskDashboardText.currencyExposure, attr: 'exposure' as const },
+      ]
+      : []),
+  ];
+  const showExposureColumn = !exposureEmpty || accountExposureRows.length > 0;
 
   return (
     <AppPage className="portfolio-page">
@@ -2734,7 +2747,7 @@ const PortfolioPage: React.FC = () => {
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-secondary">
               <span>{riskDashboardText.positions}: {positionCount}</span>
-              <span>{text.totalMarketValue}: {formatMoney(exposureTotal, exposureCurrency)}</span>
+              <span>{text.totalMarketValue}: {formatAmount(exposureTotal, exposureCurrency)}</span>
             </div>
           </div>
           {snapshotFailed || riskFailed ? (
@@ -2752,7 +2765,7 @@ const PortfolioPage: React.FC = () => {
               ))}
             </div>
           ) : (
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
+            <div className={cn('grid gap-4', showExposureColumn && 'xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]')}>
               <div className="min-w-0">
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-secondary">
                   <AlertTriangle className="h-3.5 w-3.5 text-warning" />
@@ -2765,37 +2778,49 @@ const PortfolioPage: React.FC = () => {
                     ))}
                   </div>
                 ) : null}
-                {unavailableRiskFlags.length > 0 ? (
+                {unavailableRiskItems.length > 0 ? (
                   <p data-testid="portfolio-risk-unavailable" className="mt-2 text-xs text-muted-text">
                     {w10Text.riskUnavailable}
-                    {unavailableRiskFlags.map((flag, index) => (
-                      <Fragment key={flag.key}>
+                    {unavailableRiskItems.map((item, index) => (
+                      <Fragment key={`${item.attr}-${item.key}`}>
                         {index > 0 ? (language === 'en' ? ', ' : '、') : null}
-                        <span data-flag-key={flag.key} data-flag-state="unavailable">{flag.label}</span>
+                        {item.attr === 'flag' ? (
+                          <span data-flag-key={item.key} data-flag-state="unavailable">{item.label}</span>
+                        ) : (
+                          <span data-exposure-key={item.key} data-exposure-state="unavailable">{item.label}</span>
+                        )}
                       </Fragment>
                     ))}
                   </p>
                 ) : null}
+                {exposureEmpty && !exposureUnavailableMerged ? (
+                  <p data-testid="portfolio-exposure-empty" className="mt-2 text-xs text-muted-text">{exposureEmptyLabel}</p>
+                ) : null}
               </div>
+              {showExposureColumn ? (
               <div className="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-1">
-                <div className="mb-[-0.25rem] hidden items-center gap-2 text-xs font-semibold text-secondary xl:flex">
-                  <Layers3 className="h-3.5 w-3.5 text-cyan" />
-                  {riskDashboardText.marketExposure} / {riskDashboardText.currencyExposure}
-                </div>
-                <PortfolioExposureList
-                  title={riskDashboardText.marketExposure}
-                  rows={marketExposureRows}
-                  currency={exposureCurrency || 'CNY'}
-                  emptyLabel={exposureEmptyLabel}
-                  positionLabel={riskDashboardText.positions}
-                />
-                <PortfolioExposureList
-                  title={riskDashboardText.currencyExposure}
-                  rows={currencyExposureRows}
-                  currency={exposureCurrency || 'CNY'}
-                  emptyLabel={exposureEmptyLabel}
-                  positionLabel={riskDashboardText.positions}
-                />
+                {!exposureEmpty ? (
+                  <>
+                    <div className="mb-[-0.25rem] hidden items-center gap-2 text-xs font-semibold text-secondary xl:flex">
+                      <Layers3 className="h-3.5 w-3.5 text-cyan" />
+                      {riskDashboardText.marketExposure} / {riskDashboardText.currencyExposure}
+                    </div>
+                    <PortfolioExposureList
+                      title={riskDashboardText.marketExposure}
+                      rows={marketExposureRows}
+                      currency={exposureCurrency || 'CNY'}
+                      emptyLabel={exposureEmptyLabel}
+                      positionLabel={riskDashboardText.positions}
+                    />
+                    <PortfolioExposureList
+                      title={riskDashboardText.currencyExposure}
+                      rows={currencyExposureRows}
+                      currency={exposureCurrency || 'CNY'}
+                      emptyLabel={exposureEmptyLabel}
+                      positionLabel={riskDashboardText.positions}
+                    />
+                  </>
+                ) : null}
                 {accountExposureRows.length > 0 ? (
                   <PortfolioExposureList
                     title={pageText.accountExposure}
@@ -2806,6 +2831,7 @@ const PortfolioPage: React.FC = () => {
                   />
                 ) : null}
               </div>
+              ) : null}
             </div>
           )}
         </Card>

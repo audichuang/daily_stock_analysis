@@ -42,8 +42,8 @@ describe('orderSettingsCategories', () => {
 
 describe('getSettingsCategoryStatus', () => {
   it('counts watchlist stocks', () => {
-    expect(getSettingsCategoryStatus('base', [item('STOCK_LIST', '2330.TW,AAPL')], t)).toBe('2 檔');
-    expect(getSettingsCategoryStatus('base', [], t)).toBe('0 檔');
+    expect(getSettingsCategoryStatus('base', [item('STOCK_LIST', '2330.TW,AAPL')], t)).toBe('自選 2 檔');
+    expect(getSettingsCategoryStatus('base', [], t)).toBe('自選 0 檔');
   });
 
   it('counts configured notification channels and reports none as not set', () => {

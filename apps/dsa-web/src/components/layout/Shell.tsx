@@ -124,7 +124,7 @@ const ShellFrame: React.FC<ShellProps> = ({ children }) => {
           <Drawer
             isOpen={mobileOpen}
             onClose={() => setMobileOpen(false)}
-            title={t('layout.navMenu')}
+            title={t('layout.moreDrawerTitle')}
             width="max-w-xs"
             zIndex={90}
             side="left"

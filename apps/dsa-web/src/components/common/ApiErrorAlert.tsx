@@ -2,6 +2,9 @@ import type React from 'react';
 import type { ParsedApiError } from '../../api/error';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 
+const LONG_MESSAGE_THRESHOLD = 200;
+const CLAMP_LINES = 3;
+
 interface ApiErrorAlertProps {
   error: ParsedApiError;
   className?: string;
@@ -20,7 +23,17 @@ export const ApiErrorAlert: React.FC<ApiErrorAlertProps> = ({
   onDismiss,
 }) => {
   const { t } = useUiLanguage();
-  const showDetails = error.rawMessage.trim() && error.rawMessage.trim() !== error.message.trim();
+  const trimmedMessage = error.message.trim();
+  const trimmedRaw = error.rawMessage.trim();
+  // Only a long message (over 200 chars or more than three lines) is clamped, and then it always gets its
+  // full text in the details, even when identical to rawMessage (the generic path uses rawMessage as the message).
+  const isLongMessage = trimmedMessage.length > LONG_MESSAGE_THRESHOLD
+    || trimmedMessage.split('\n').length > CLAMP_LINES;
+  const showRaw = Boolean(trimmedRaw) && trimmedRaw !== trimmedMessage;
+  const detailTexts = [isLongMessage ? error.message : null, showRaw ? error.rawMessage : null].filter(
+    (text): text is string => Boolean(text),
+  );
+  const showDetails = detailTexts.length > 0;
 
   return (
     <div
@@ -30,7 +43,7 @@ export const ApiErrorAlert: React.FC<ApiErrorAlertProps> = ({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-semibold">{error.title}</p>
-          <p className="mt-1 whitespace-pre-line break-words text-xs opacity-90">{error.message}</p>
+          <p className={`mt-1 ${isLongMessage ? 'line-clamp-3 ' : ''}whitespace-pre-line break-words text-xs opacity-90 [overflow-wrap:anywhere]`}>{error.message}</p>
         </div>
         {onDismiss ? (
           <button
@@ -45,9 +58,14 @@ export const ApiErrorAlert: React.FC<ApiErrorAlertProps> = ({
       {showDetails ? (
         <details className="mt-3 rounded-lg border border-subtle bg-surface-2 px-3 py-2">
           <summary className="cursor-pointer text-xs text-[hsl(var(--color-danger-alert-text))] opacity-90">{t('common.details')}</summary>
-          <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] leading-5 text-[hsl(var(--color-danger-alert-text))] opacity-85">
-            {error.rawMessage}
-          </pre>
+          {detailTexts.map((text, index) => (
+            <pre
+              key={index}
+              className="mt-2 whitespace-pre-wrap break-words text-[11px] leading-5 text-[hsl(var(--color-danger-alert-text))] opacity-85 [overflow-wrap:anywhere]"
+            >
+              {text}
+            </pre>
+          ))}
         </details>
       ) : null}
       {actionLabel && onAction ? (

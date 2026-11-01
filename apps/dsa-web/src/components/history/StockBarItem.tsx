@@ -19,6 +19,8 @@ interface StockBarItemProps {
   marketLightLabel?: string;
   /** 大盤複盤列標題裡的市場，例如「美股」；沒給就只寫日期。 */
   marketReviewRegionLabel?: string;
+  /** 釘頂複盤列的交易日，例如「美股 10/30」；有給就取代市場＋建立日。 */
+  marketReviewSessionLabel?: string;
 }
 
 // Only buy/add (brand) and reduce/sell (caution) get a fill; neutral and unknown actions are muted text.
@@ -109,12 +111,15 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
   quote,
   marketLightLabel,
   marketReviewRegionLabel,
+  marketReviewSessionLabel,
 }) => {
   const { t, language } = useUiLanguage();
   const stockName = item.stockName || item.stockCode;
+  // Prefer the trade-date label; the record's creation date can be a day after the session it reviews.
   const marketReviewTitle = [
     HOME_TEXT[language].latestReview,
-    [marketReviewRegionLabel, formatMonthDay(item.lastAnalysisTime)].filter(Boolean).join(' '),
+    marketReviewSessionLabel
+      || [marketReviewRegionLabel, formatMonthDay(item.lastAnalysisTime)].filter(Boolean).join(' '),
   ].filter(Boolean).join(' · ');
 
   return (

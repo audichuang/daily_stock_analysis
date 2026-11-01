@@ -64,7 +64,10 @@ const SORT_STORAGE_KEY = 'dsa.board.sort';
 const SPARK_STORAGE_KEY = 'dsa.board.spark';
 const ATTENTION_MOVE_PCT = 5; // 單日變動超過這個幅度才進「需注意」，常態波動是噪音
 const ATTENTION_MAX = 5; // 膠囊最多顯示幾個，其餘收成「還有 N 檔」
-const HIGHLIGHT_MS = 1500; // 從需注意跳過去後高亮多久
+const HIGHLIGHT_MS = 2000; // 從需注意跳過去、捲動停下後高亮多久
+const SCROLL_SETTLE_FALLBACK_MS = 900; // 沒收到 scrollend（瀏覽器不支援或根本沒捲）時，當作捲動已停下的等待時間
+// 手機卡片捲到頂時讓出殼層標題與狀態列，列頭才不會被蓋住
+const MOBILE_ROW_SCROLL_MARGIN = '[&_li[data-row-key]]:scroll-mt-[calc(var(--shell-header-height)+var(--shell-status-height)+0.5rem)]';
 const DESKTOP_MEDIA_QUERY = '(min-width: 768px)'; // 與 DataTable 的 md 斷點一致
 
 type Scope = 'all' | 'watch' | 'holdings';
@@ -465,6 +468,8 @@ const RealtimeBoardPage: React.FC = () => {
   const [holdingsSettled, setHoldingsSettled] = useState(false);
   const [highlighted, setHighlighted] = useState<string | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
+  // Detaches the pending scrollend listener and fallback timer of the last attention jump.
+  const scrollSettleCleanupRef = useRef<(() => void) | null>(null);
   const holdingsLoadedRef = useRef(false);
   const aliveRef = useRef(true);
   const [error, setError] = useState<ParsedApiError | null>(null);
@@ -536,6 +541,7 @@ const RealtimeBoardPage: React.FC = () => {
     return () => {
       aliveRef.current = false;
       if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
+      scrollSettleCleanupRef.current?.();
     };
   }, []);
 
@@ -1196,7 +1202,8 @@ const RealtimeBoardPage: React.FC = () => {
   const attentionShown = attention.slice(0, ATTENTION_MAX);
   const attentionHidden = attention.length - attentionShown.length;
 
-  // 點膠囊：清篩選 → 切到含該檔的範圍 → 展開 → 下一格畫面捲到那列置中並短暫高亮
+  // 點膠囊：清篩選 → 切到含該檔的範圍 → 展開 → 下一格畫面捲到那列（桌機置中、手機貼殼層下緣）並高亮，
+  // 高亮從捲動停下才開始計時，免得還沒捲到就先消失
   const jumpToRow = (row: BoardRow) => {
     setFilter('');
     const inScope =
@@ -1209,13 +1216,38 @@ const RealtimeBoardPage: React.FC = () => {
     setExpanded(row.code);
     setHighlighted(row.code);
     if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
-    highlightTimerRef.current = window.setTimeout(() => {
-      if (aliveRef.current) setHighlighted(null);
-      highlightTimerRef.current = null;
-    }, HIGHLIGHT_MS);
-    const selector = `${isDesktopViewport() ? 'tr' : 'li'}[data-row-key="${row.code.replace(/["\\]/g, '\\$&')}"]`;
+    highlightTimerRef.current = null;
+    scrollSettleCleanupRef.current?.();
+    // The fallback starts the countdown in case scrollend never comes (unsupported, or nothing to scroll);
+    // a later scrollend restarts it so a long smooth scroll still ends on a highlighted row.
+    const startHighlightCountdown = () => {
+      if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = window.setTimeout(() => {
+        if (aliveRef.current) setHighlighted(null);
+        highlightTimerRef.current = null;
+      }, HIGHLIGHT_MS);
+    };
+    const fallbackTimer = window.setTimeout(startHighlightCountdown, SCROLL_SETTLE_FALLBACK_MS);
+    const listener = new AbortController();
+    const cleanupScrollSettle = () => {
+      window.clearTimeout(fallbackTimer);
+      listener.abort();
+      if (scrollSettleCleanupRef.current === cleanupScrollSettle) scrollSettleCleanupRef.current = null;
+    };
+    // scrollend on an element does not bubble, so listen in the capture phase to catch inner scrollers too.
+    document.addEventListener(
+      'scrollend',
+      () => {
+        cleanupScrollSettle();
+        startHighlightCountdown();
+      },
+      { capture: true, signal: listener.signal },
+    );
+    scrollSettleCleanupRef.current = cleanupScrollSettle;
+    const desktopViewport = isDesktopViewport();
+    const selector = `${desktopViewport ? 'tr' : 'li'}[data-row-key="${row.code.replace(/["\\]/g, '\\$&')}"]`;
     window.requestAnimationFrame(() => {
-      document.querySelector(selector)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      document.querySelector(selector)?.scrollIntoView({ block: desktopViewport ? 'center' : 'start', behavior: 'smooth' });
     });
   };
 
@@ -1252,10 +1284,13 @@ const RealtimeBoardPage: React.FC = () => {
         {/* Phones: two indices per row instead of one per line, so the first stock row stays above the fold. */}
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 md:flex md:flex-wrap md:items-baseline md:gap-x-8 md:gap-y-2">
           {indices.map((idx) => (
-            <div key={idx.code} className="flex min-w-0 flex-wrap items-baseline gap-x-2 tabular-nums">
+            // Phones: always name on line one, value and change on line two, so long and short names line up.
+            <div key={idx.code} className="flex min-w-0 flex-col tabular-nums md:flex-row md:items-baseline md:gap-x-2">
               <span className="truncate text-sm text-secondary-text">{idx.name}</span>
-              <span className="text-base font-medium">{formatNumber(idx.current, 2)}</span>
-              <span className={cn('text-sm', changeClass(idx.changePct))}>{formatPercent(idx.changePct)}</span>
+              <span className="flex items-baseline gap-2">
+                <span className="text-base font-medium">{formatNumber(idx.current, 2)}</span>
+                <span className={cn('text-sm', changeClass(idx.changePct))}>{formatPercent(idx.changePct)}</span>
+              </span>
             </div>
           ))}
         </div>
@@ -1433,7 +1468,14 @@ const RealtimeBoardPage: React.FC = () => {
         </Card>
       ) : (
         visibleSections.map((section) => (
-          <Card key={section} variant="surface" padding="md">
+          // .card-surface sets overflow:hidden outside any layer, which traps the sticky thead inside the card;
+          // overflow:clip still clips but is not a scroll container, so the header sticks below the shell.
+          <Card
+            key={section}
+            variant="surface"
+            padding="md"
+            className={cn('![overflow:clip]', MOBILE_ROW_SCROLL_MARGIN)}
+          >
             <div className="mb-2 text-sm font-medium">
               {t(`board.section.${section}`)}
               <span className="ml-1.5 text-xs font-normal text-secondary-text">{sectionRows[section].length}</span>

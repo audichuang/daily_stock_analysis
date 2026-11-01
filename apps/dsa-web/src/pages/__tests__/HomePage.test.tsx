@@ -70,7 +70,7 @@ vi.mock('../../api/portfolio', async () => {
 
 vi.mock('../../api/decisionSignals', async () => {
   const actual = await vi.importActual<typeof import('../../api/decisionSignals')>('../../api/decisionSignals');
-  return { ...actual, decisionSignalsApi: { ...actual.decisionSignalsApi, getSummary: vi.fn() } };
+  return { ...actual, decisionSignalsApi: { ...actual.decisionSignalsApi, getSummary: vi.fn(), list: vi.fn() } };
 });
 
 vi.mock('../../api/systemConfig', () => ({
@@ -296,6 +296,7 @@ describe('HomePage', () => {
     vi.mocked(stocksApi.getQuotesBatched).mockResolvedValue([]);
     vi.mocked(portfolioApi.getSnapshot).mockRejectedValue(new Error('no portfolio'));
     vi.mocked(decisionSignalsApi.getSummary).mockRejectedValue(new Error('no signals'));
+    vi.mocked(decisionSignalsApi.list).mockRejectedValue(new Error('no signals'));
     vi.mocked(analysisApi.getTasks).mockResolvedValue({
       total: 0,
       pending: 0,
@@ -359,17 +360,114 @@ describe('HomePage', () => {
   });
 
   it('pins the mobile list drawer to the viewport so the list can scroll', async () => {
-    // .dashboard-card 是未分層 CSS 的 position: relative，會蓋掉 Tailwind 的 absolute；
-    // 抽屜失去 top/bottom 就被內容撐高，手機上整條清單捲不動。jsdom 不算層疊，只能守 class。
+    // 抽屜要靠 absolute + top/bottom 撐滿視窗高度，否則被內容撐高，手機上整條清單捲不動。
+    // 不能再套 .dashboard-card：它是未分層 CSS 的 position: relative，會蓋掉 Tailwind 的 absolute。
+    // jsdom 不算層疊，只能守 class。
     render(
       <MemoryRouter initialEntries={['/']}>
         <HomePage />
       </MemoryRouter>,
     );
     fireEvent.click(await screen.findByRole('button', { name: /^清单 \d+/ }));
-    const drawer = document.querySelector('.fixed.inset-0 .dashboard-card');
+    const drawer = document.querySelector('.fixed.inset-0 .bg-elevated');
     expect(drawer).not.toBeNull();
-    expect(drawer?.classList.contains('!absolute')).toBe(true);
+    expect(drawer).toHaveClass('absolute', 'top-0', 'bottom-0', 'w-72');
+    expect(drawer).not.toHaveClass('dashboard-card');
+    expect(drawer).not.toHaveClass('shadow-2xl');
+  });
+
+  it('shows the list title in the mobile drawer and closes it from the close button', async () => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <HomePage />
+      </MemoryRouter>,
+    );
+    // The desktop sidebar has no close handler, so no drawer header before opening.
+    expect(screen.queryByTestId('home-list-drawer-header')).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^清单 \d+/ }));
+    const header = await screen.findByTestId('home-list-drawer-header');
+    expect(within(header).getByText('清单')).toBeInTheDocument();
+    // The drawer's workspace drops its own glass-card frame; the desktop one keeps it.
+    const workspaces = screen.getAllByTestId('home-stock-workspace');
+    expect(workspaces).toHaveLength(2);
+    expect(workspaces.filter((node) => node.classList.contains('glass-card'))).toHaveLength(1);
+
+    fireEvent.click(within(header).getByRole('button', { name: '关闭清单' }));
+    await waitFor(() => expect(screen.queryByTestId('home-list-drawer-header')).not.toBeInTheDocument());
+    expect(document.querySelector('.fixed.inset-0 .bg-elevated')).toBeNull();
+    expect(screen.getAllByTestId('home-stock-workspace')).toHaveLength(1);
+  });
+
+  it('labels the pinned market review row with the trade date and the review-page light wording', async () => {
+    vi.mocked(historyApi.getList).mockImplementation((params: { reportType?: string } = {}) => (
+      Promise.resolve(params.reportType === 'market_review'
+        ? { total: 1, page: 1, limit: 10, items: [marketReviewHistoryItem] }
+        : { total: 0, page: 1, limit: 20, items: [] })
+    ));
+    vi.mocked(historyApi.getDetail).mockResolvedValue({
+      ...marketReviewHistoryReport,
+      details: {
+        contextSnapshot: {
+          marketReviewPayload: {
+            region: 'tw',
+            date: '2026-03-18',
+            marketLight: { status: 'red', tradeDate: '2026-03-17' },
+          },
+        },
+      },
+    } as unknown as Awaited<ReturnType<typeof historyApi.getDetail>>);
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    const light = await screen.findByTestId('market-review-light');
+    await waitFor(() => expect(light).toHaveTextContent('警戒'));
+    expect(light).not.toHaveTextContent('红灯');
+    // Trade date (03/17) wins over the record's creation date (03/18).
+    const title = screen.getByTestId('market-review-title');
+    expect(title).toHaveTextContent('03/17');
+    expect(title).not.toHaveTextContent('03/18');
+  });
+
+  it('drops the previous review payload when a newer review replaces it and its detail fails', async () => {
+    vi.mocked(historyApi.getList).mockImplementation((params: { reportType?: string } = {}) => (
+      Promise.resolve(params.reportType === 'market_review'
+        ? { total: 1, page: 1, limit: 10, items: [marketReviewHistoryItem] }
+        : { total: 0, page: 1, limit: 20, items: [] })
+    ));
+    vi.mocked(historyApi.getDetail).mockImplementation((id: number) => (id === marketReviewHistoryItem.id
+      ? Promise.resolve({
+        ...marketReviewHistoryReport,
+        details: {
+          contextSnapshot: {
+            marketReviewPayload: { region: 'tw', date: '2026-03-18', marketLight: { status: 'red', tradeDate: '2026-03-17' } },
+          },
+        },
+      } as unknown as Awaited<ReturnType<typeof historyApi.getDetail>>)
+      : Promise.reject(new Error('detail unavailable'))));
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('market-review-title')).toHaveTextContent('03/17'));
+
+    const newerReview = { ...marketReviewHistoryItem, id: 3, queryId: 'market-review-q-2', createdAt: '2026-03-20T08:00:00Z' };
+    act(() => {
+      useStockPoolStore.setState({ marketReviewHistoryItems: [newerReview, marketReviewHistoryItem] });
+    });
+    await waitFor(() => expect(historyApi.getDetail).toHaveBeenCalledWith(3));
+
+    // The newer record's own creation date, not the old payload's trade date, and no stale light.
+    await waitFor(() => expect(screen.getByTestId('market-review-title')).toHaveTextContent('03/20'));
+    expect(screen.getByTestId('market-review-title')).not.toHaveTextContent('03/17');
+    expect(screen.getByTestId('market-review-light')).not.toHaveTextContent('警戒');
   });
 
   it('loads markdown only after opening the full report drawer', async () => {
@@ -429,6 +527,8 @@ describe('HomePage', () => {
       stopTriggered: [],
       stopPriceUnavailableCount: 0,
     });
+    // Pending reduce reads the AI signals page's list total, not summary.actions.reduce.
+    vi.mocked(decisionSignalsApi.list).mockResolvedValue({ items: [], total: 2, page: 1, pageSize: 1 } as unknown as Awaited<ReturnType<typeof decisionSignalsApi.list>>);
 
     render(
       <MemoryRouter>
@@ -656,6 +756,8 @@ describe('HomePage', () => {
     await waitFor(() => expect(historyApi.getDetail).toHaveBeenCalledWith(marketReviewHistoryItem.id));
     expect(await screen.findByText('大盘复盘摘要')).toBeInTheDocument();
     expect(analysisApi.triggerMarketReview).not.toHaveBeenCalled();
+    // Already viewing the latest review, so the button has nothing left to open.
+    await waitFor(() => expect(screen.getByRole('button', { name: '看复盘' })).toBeDisabled());
   });
 
   it('shows the actual default scope and translates the submitted region', async () => {
@@ -2230,7 +2332,8 @@ describe('HomePage', () => {
     expect(
       highScoreButton.compareDocumentPosition(lowerScoreButton) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-  });
+  // Renders 101 ranked rows; under a fully parallel suite this can exceed the 5s default.
+  }, 15_000);
 
   it('keeps the task panel collapsed after task stream updates', async () => {
     window.sessionStorage.setItem('dsa.home.taskPanelCollapsed', 'false');
@@ -3505,7 +3608,8 @@ describe('HomePage', () => {
     fireEvent.click(trigger);
 
     expect(container.querySelector('.page-drawer-overlay')).toBeTruthy();
-    expect(container.querySelector('.dashboard-card')).toBeTruthy();
+    // The drawer is a plain bg-elevated panel now (no dashboard-card frame).
+    expect(container.querySelector('.fixed.inset-0.z-40 .bg-elevated')).toBeTruthy();
 
     fireEvent.click(container.querySelector('.fixed.inset-0.z-40') as HTMLElement);
 

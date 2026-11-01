@@ -310,6 +310,16 @@ const openPageMenu = () => fireEvent.click(screen.getByRole('button', { name: '�
 // Risk flags: available ones render as chips, unavailable ones as names in one grey line; both carry data-flag-*.
 const riskFlag = (label: string) => screen.getByText(label, { exact: true }).closest('[data-flag-key]') as HTMLElement;
 const expectFlagUnavailable = (label: string) => expect(riskFlag(label)).toHaveAttribute('data-flag-state', 'unavailable');
+// Both exposure breakdowns empty: no bordered boxes; their names join the grey "unavailable" line instead.
+const expectExposureMergedUnavailable = (
+  labels: [string, string] = ['市场暴露', '币种暴露'],
+  boxLabel = '暴露不可用',
+) => {
+  const line = screen.getByTestId('portfolio-risk-unavailable');
+  for (const label of labels) expect(line).toHaveTextContent(label);
+  expect(line.querySelectorAll('[data-exposure-state="unavailable"]')).toHaveLength(2);
+  expect(screen.queryByText(boxLabel)).not.toBeInTheDocument();
+};
 // FX limitations and missing-pair hints sit in the Info tooltip; hover the trigger to read them.
 const hoverFxInfo = () => {
   fireEvent.mouseEnter(screen.getByLabelText('汇率与估值说明').closest('[tabindex="0"]') as HTMLElement);
@@ -721,7 +731,7 @@ describe('PortfolioPage FX refresh', () => {
     await waitForInitialLoad();
     const dashboard = within(screen.getByText('风险与暴露看板').closest('section') as HTMLElement);
     if (evidence === 'stale' || evidence === 'missing') {
-      expect(dashboard.getAllByText('暴露不可用')).toHaveLength(2);
+      expectExposureMergedUnavailable();
       expect(dashboard.queryByText('73.68%')).not.toBeInTheDocument();
       return;
     }
@@ -744,8 +754,7 @@ describe('PortfolioPage FX refresh', () => {
 
     render(<PortfolioPage />);
     await waitForInitialLoad();
-    const dashboard = within(screen.getByText('风险与暴露看板').closest('section') as HTMLElement);
-    expect(dashboard.getAllByText('暴露不可用')).toHaveLength(2);
+    expectExposureMergedUnavailable();
   });
 
   it('distinguishes an empty portfolio from unavailable exposure', async () => {
@@ -758,7 +767,11 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
     await waitForInitialLoad();
     const dashboard = within(screen.getByText('风险与暴露看板').closest('section') as HTMLElement);
-    expect(dashboard.getAllByText('暂无暴露数据')).toHaveLength(2);
+    // Empty portfolio: one grey line, no empty exposure boxes and no "unavailable" wording.
+    expect(dashboard.getByTestId('portfolio-exposure-empty')).toHaveTextContent('暂无暴露数据');
+    expect(dashboard.getAllByText('暂无暴露数据')).toHaveLength(1);
+    expect(dashboard.queryByText('市场暴露')).not.toBeInTheDocument();
+    expect(dashboard.queryByText('币种暴露')).not.toBeInTheDocument();
     expect(dashboard.getByText('总市值: CNY 0.00')).toBeInTheDocument();
     expect(dashboard.getByText('持仓: 0')).toBeInTheDocument();
     expect(screen.getByText('共 0 项')).toBeInTheDocument();
@@ -771,8 +784,12 @@ describe('PortfolioPage FX refresh', () => {
     renderEnglishPage();
     await waitForInitialLoad();
     const dashboard = within(screen.getByText('Risk and exposure dashboard').closest('section') as HTMLElement);
-    expect(dashboard.getAllByText('Exposure unavailable')).toHaveLength(2);
+    expectExposureMergedUnavailable(['Market exposure', 'Currency exposure'], 'Exposure unavailable');
+    expect(dashboard.getByTestId('portfolio-risk-unavailable')).toHaveTextContent(/Unavailable: .*Market exposure, Currency exposure/);
     expect(dashboard.queryByText('No exposure data')).not.toBeInTheDocument();
+    // The exposure column is not rendered at all, so no empty bordered boxes remain.
+    expect(dashboard.queryByRole('heading', { name: 'Market exposure' })).not.toBeInTheDocument();
+    expect(dashboard.queryByRole('heading', { name: 'Currency exposure' })).not.toBeInTheDocument();
   });
 
   it('hides exposure breakdowns when positions mix valuation currencies under one aggregate snapshot', async () => {
@@ -837,8 +854,7 @@ describe('PortfolioPage FX refresh', () => {
 
     const dashboard = screen.getByText('风险与暴露看板').closest('section');
     expect(dashboard).not.toBeNull();
-    const dashboardScope = within(dashboard as HTMLElement);
-    expect(dashboardScope.getAllByText('暴露不可用')).toHaveLength(2);
+    expectExposureMergedUnavailable();
   });
 
   it('renders every market exposure group instead of silently dropping the remainder', async () => {
@@ -885,7 +901,7 @@ describe('PortfolioPage FX refresh', () => {
     const dashboard = screen.getByText('风险与暴露看板').closest('section');
     expect(dashboard).not.toBeNull();
     const dashboardScope = within(dashboard as HTMLElement);
-    expect(dashboardScope.getAllByText('暴露不可用')).toHaveLength(2);
+    expectExposureMergedUnavailable();
     expect(dashboardScope.queryByText('CNY 100.00')).not.toBeInTheDocument();
     expect(dashboardScope.queryByText('100.00%')).not.toBeInTheDocument();
   });
@@ -1137,7 +1153,7 @@ describe('PortfolioPage FX refresh', () => {
     for (const label of ['个股集中', '行业集中']) {
       expectFlagUnavailable(label);
     }
-    expect(screen.getAllByText('暴露不可用')).toHaveLength(2);
+    expectExposureMergedUnavailable();
     expect(screen.queryByText('美股')).not.toBeInTheDocument();
     expect(screen.queryByText('100.00%')).not.toBeInTheDocument();
     // No concentration evidence: the card is not rendered at all instead of an empty box.
@@ -1200,7 +1216,7 @@ describe('PortfolioPage FX refresh', () => {
 
     await waitForInitialLoad();
     expectFlagUnavailable('个股集中');
-    expect(screen.getAllByText('暴露不可用')).toHaveLength(2);
+    expectExposureMergedUnavailable();
   });
 
   it('collapses the risk area into one failure row when the portfolio snapshot fails', async () => {
@@ -2566,7 +2582,7 @@ describe('PortfolioPage FX refresh', () => {
     await waitForInitialLoad();
 
     const dashboard = within(await screen.findByTestId('portfolio-risk'));
-    expect(dashboard.getByText('总市值: TWD 9,000.00')).toBeInTheDocument();
+    expect(dashboard.getByText('总市值: NT$ 9,000')).toBeInTheDocument();
     expect(dashboard.getAllByText('TWD 9,000.00').length).toBeGreaterThan(0);
     expect(dashboard.queryByText('CNY 2,000.00')).not.toBeInTheDocument();
     expect(dashboard.getAllByText('100.00%').length).toBeGreaterThan(0);
@@ -2964,8 +2980,61 @@ describe('PortfolioPage FX refresh', () => {
     // 600,000 / 1,320,000 (TWD-equivalent total, same source as the summary cards).
     expect(table.getByText('45.45%')).toBeInTheDocument();
     const taiwan = table.getByText('台股（2 档）').closest('tr') as HTMLElement;
-    expect(within(taiwan).getByText('TWD 1,000,000.00')).toBeInTheDocument();
+    expect(within(taiwan).getByText('NT$ 1,000,000')).toBeInTheDocument();
     expect(within(taiwan).getByText('75.76%')).toBeInTheDocument();
+  });
+
+  it('shows Taiwan holding values, P&L and subtotals as NT$ without decimals and keeps the phone weight visible', async () => {
+    const base = makeSnapshot({
+      fxStale: false,
+      positions: [
+        makePosition({
+          symbol: '2887.TW', market: 'tw', name: 'Taishin Shin Kong Financial Holding', currency: 'TWD', valuationCurrency: 'TWD',
+          marketValueBase: 829_916.75, unrealizedPnlBase: 619_805.4,
+        }),
+        makePosition({
+          symbol: '2330.TW', market: 'tw', name: 'TSMC', currency: 'TWD', valuationCurrency: 'TWD',
+          marketValueBase: 100_000.5, unrealizedPnlBase: -1_234.25,
+        }),
+      ],
+    });
+    getSnapshot.mockResolvedValueOnce({
+      ...base,
+      currency: 'TWD',
+      totalMarketValue: 929_917.25,
+      accounts: [{ ...base.accounts[0], market: 'tw', baseCurrency: 'TWD', totalMarketValue: 929_917.25 }],
+    });
+
+    renderEnglishPage();
+    await waitForInitialLoad();
+
+    const holdings = await screen.findByTestId('portfolio-holdings');
+    const mobile = within(within(holdings).getByTestId('data-table-mobile'));
+    const card = (await mobile.findByText('2887.TW')).closest('li') as HTMLElement;
+    const value = within(card).getByText('NT$ 829,917');
+    expect(value.textContent?.startsWith('NT$')).toBe(true);
+    expect(card.textContent).not.toMatch(/829,91[67]\.\d/);
+    expect(card.textContent).not.toContain('TWD ');
+    expect(within(card).getByText(/^NT\$ \+619,805 · /)).toBeInTheDocument();
+    // Second line: the weight never shrinks; only the code segment truncates.
+    expect(within(card).getByTestId('holding-mobile-weight')).toHaveClass('shrink-0');
+    expect(within(card).getByText('2887.TW')).toHaveClass('truncate');
+    const tsmcCard = mobile.getByText('2330.TW').closest('li') as HTMLElement;
+    expect(within(tsmcCard).getByText(/^NT\$ \u22121,234 · /)).toBeInTheDocument();
+
+    // Subtotals match the summary metrics: NT$ prefix, no decimals (929,917.25 → 929,917).
+    const mobileSubtotal = within(holdings).getByTestId('data-table-mobile').querySelector('li[data-row-group="tw"]') as HTMLElement;
+    expect(mobileSubtotal).toHaveTextContent('NT$ 929,917');
+    expect(mobileSubtotal.textContent).not.toMatch(/929,917\.\d/);
+    const table = await desktopHoldings();
+    const taiwan = table.getByText('Taiwan (2)').closest('tr') as HTMLElement;
+    expect(within(taiwan).getByText('NT$ 929,917')).toBeInTheDocument();
+    expect(within(taiwan).getByText('NT$ +618,571')).toBeInTheDocument();
+    expect(taiwan.textContent).not.toContain('TWD ');
+    expect(taiwan.textContent).not.toMatch(/(929,917|618,571)\.\d/);
+
+    // Risk dashboard total uses the same aggregate format.
+    expect(within(screen.getByTestId('portfolio-risk')).getByText('Total market value: NT$ 929,917')).toBeInTheDocument();
   });
 
   it('labels the day P&L with the quote date when quotes are not from today', async () => {

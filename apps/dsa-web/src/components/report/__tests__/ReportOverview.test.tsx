@@ -261,6 +261,21 @@ describe('ReportOverview', () => {
     expect(screen.queryByText('领跌')).not.toBeInTheDocument();
   });
 
+  it('maps yfinance industry names to Chinese for zh-TW reports', () => {
+    render(
+      <ReportOverview
+        meta={{ ...baseMeta, reportLanguage: 'zh-TW' as const }}
+        summary={baseSummary}
+        details={{
+          belongBoards: [{ name: 'Banks - Regional' }],
+        }}
+      />,
+    );
+
+    expect(screen.getByText('區域銀行')).toBeInTheDocument();
+    expect(screen.queryByText('Banks - Regional')).not.toBeInTheDocument();
+  });
+
   it('shows only the board when a matching ranking has no change percent', () => {
     render(
       <ReportOverview

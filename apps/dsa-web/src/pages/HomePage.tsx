@@ -32,6 +32,7 @@ import { useStockQuotes } from '../hooks/useStockQuotes';
 import { useWatchlist } from '../hooks/useWatchlist';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatUiText } from '../i18n/uiText';
+import { formatMonthDay } from '../locales/homeText';
 import { getMarketReviewUiText } from '../locales/marketReviewText';
 import type { SetupStatusResponse } from '../types/systemConfig';
 import { normalizeReportLanguage } from '../utils/reportLanguage';
@@ -1633,20 +1634,43 @@ const HomePage: React.FC = () => {
       active = false;
     };
   }, [latestMarketReviewId]);
+  // A payload fetched for an older review must not label a newer one (its fetch may fail or still be pending).
+  const latestMarketReviewPayload = marketLightSource && marketLightSource.id === latestMarketReviewId
+    ? marketLightSource.payload
+    : null;
 
+  // Same light wording as the market review page (警戒／中性／順風), not the generic 紅燈／黃燈／綠燈.
   const marketLightLabel = useMemo(() => {
+    const reviewText = getMarketReviewUiText(uiLanguage);
     const lightLabels: Record<string, string> = {
-      green: t('marketLight.green'),
-      yellow: t('marketLight.yellow'),
-      red: t('marketLight.red'),
+      green: reviewText.lightTailwind,
+      yellow: reviewText.lightNeutral,
+      red: reviewText.lightCaution,
     };
-    return getMarketReviewLights(marketLightSource?.payload)
+    return getMarketReviewLights(latestMarketReviewPayload)
       .map(({ region, light }) => {
         const market = formatMarketReviewRegion(region, marketRegionLabels);
         return `${market} ${lightLabels[light.status ?? ''] ?? ''}`.trim();
       })
       .join('｜');
-  }, [marketLightSource, marketRegionLabels, t]);
+  }, [latestMarketReviewPayload, marketRegionLabels, uiLanguage]);
+
+  // Trade-date label for the pinned review row, e.g. 「美股 10/30」; same date rule as TodayOverview's VerdictCard.
+  const marketReviewSessionLabel = useMemo(() => {
+    const payload = latestMarketReviewPayload;
+    if (!payload) return '';
+    const entries: Array<[string, MarketReviewPayload]> = payload.markets
+      ? Object.entries(payload.markets)
+      : [[payload.region ?? '', payload]];
+    return entries
+      .map(([region, market]) => {
+        const date = formatMonthDay(market.marketLight?.tradeDate ?? market.date ?? payload.date);
+        if (!date) return '';
+        return `${formatMarketReviewRegion(region, marketRegionLabels)} ${date}`.trim();
+      })
+      .filter(Boolean)
+      .join('｜');
+  }, [latestMarketReviewPayload, marketRegionLabels]);
 
   // 現價走批次行情（自選＋清單），指數與大盤複盤不查。
   const quoteCodes = useMemo(() => {
@@ -1667,8 +1691,8 @@ const HomePage: React.FC = () => {
       ? todayAnalysisItems.length
       : stockBarItems.length;
 
-  const sidebarContent = useMemo(
-    () => (
+  const renderSidebarContent = useCallback(
+    (drawer?: { onClose: () => void }) => (
       <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden">
         <TaskPanel
           tasks={activeTasks}
@@ -1705,8 +1729,11 @@ const HomePage: React.FC = () => {
           quotes={quotes}
           marketReviewItem={marketReviewItem}
           marketLightLabel={marketLightLabel}
+          marketReviewSessionLabel={marketReviewSessionLabel || undefined}
           watchlistGroups={watchlistState.watchlistGroups}
           onSaveWatchlistGroups={watchlistState.saveWatchlistGroups}
+          framed={!drawer}
+          onClose={drawer?.onClose}
         />
       </div>
     ),
@@ -1727,6 +1754,7 @@ const HomePage: React.FC = () => {
       todayAnalysisLoadFailed,
       marketLightLabel,
       marketReviewItem,
+      marketReviewSessionLabel,
       mergedStockBarItems,
       openTaskRunFlow,
       quotes,
@@ -1745,6 +1773,12 @@ const HomePage: React.FC = () => {
       watchlistState.saveWatchlistGroups,
       watchlistState.watchlistGroups,
     ],
+  );
+  const sidebarContent = useMemo(() => renderSidebarContent(), [renderSidebarContent]);
+  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+  const drawerSidebarContent = useMemo(
+    () => renderSidebarContent({ onClose: closeSidebar }),
+    [closeSidebar, renderSidebarContent],
   );
 
   const isStockReportOpen = Boolean(selectedReport) && !isMarketReviewHistoryReport && !marketReviewReport;
@@ -1838,7 +1872,7 @@ const HomePage: React.FC = () => {
         type="button"
         variant="secondary"
         size="md"
-        disabled={!latestMarketReview}
+        disabled={!latestMarketReview || selectedReport?.meta.id === latestMarketReview.id}
         onClick={() => {
           if (latestMarketReview) {
             handleHistoryItemClick(latestMarketReview.id);
@@ -2054,10 +2088,10 @@ const HomePage: React.FC = () => {
             <div className="fixed inset-0 z-40 md:hidden" onClick={() => setSidebarOpen(false)}>
               <div className="page-drawer-overlay absolute inset-0" />
               <div
-                className="dashboard-card !absolute bottom-0 left-0 top-0 flex w-72 flex-col overflow-hidden !rounded-none !rounded-r-xl p-3 shadow-2xl"
+                className="absolute bottom-0 left-0 top-0 flex w-72 flex-col overflow-hidden rounded-r-xl bg-elevated p-3"
                 onClick={(event) => event.stopPropagation()}
               >
-                {sidebarContent}
+                {drawerSidebarContent}
               </div>
             </div>
           ) : null}

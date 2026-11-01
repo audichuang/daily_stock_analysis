@@ -41,8 +41,6 @@ export default function CalendarPage() {
   const response = result?.key === requestKey ? result.response : null;
   const failed = result?.key === requestKey && result.failed;
 
-  useEffect(() => { document.title = `${text.title} - DSA`; }, [text.title]);
-
   useEffect(() => {
     let active = true;
     const { from, to } = monthRange(month);

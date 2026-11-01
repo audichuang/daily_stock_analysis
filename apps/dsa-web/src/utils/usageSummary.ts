@@ -20,6 +20,24 @@ export const sharePercents = (values: number[]): number[] => {
 /** 同一模型會因路由前綴出現多個名稱（openai/x 與 x），顯示時合併。 */
 export const modelDisplayName = (model: string): string => model.split('/').pop() || model;
 
+const CLAUDE_FAMILY: Record<string, string> = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
+// claude-sonnet-5-5, claude-opus-4-7-20260101, claude-sonnet-4-20250514
+const CLAUDE_MODERN_ID = /^claude-(opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?:-\d{8}|-latest)?$/i;
+// claude-3-5-sonnet-20241022, claude-3-opus-20240229
+const CLAUDE_LEGACY_ID = /^claude-(\d+)(?:-(\d{1,2}))?-(opus|sonnet|haiku)(?:-\d{8}|-latest)?$/i;
+
+/** Claude model id -> product name (claude-sonnet-5-5 -> Claude Sonnet 5.5); anything else is returned unchanged. */
+export const prettyModelName = (id: string): string => {
+  const format = (family: string, major: string, minor?: string) => (
+    `Claude ${CLAUDE_FAMILY[family.toLowerCase()]} ${minor ? `${major}.${minor}` : major}`
+  );
+  const modern = CLAUDE_MODERN_ID.exec(id);
+  if (modern) return format(modern[1], modern[2], modern[3]);
+  const legacy = CLAUDE_LEGACY_ID.exec(id);
+  if (legacy) return format(legacy[3], legacy[1], legacy[2]);
+  return id;
+};
+
 export type ModelCostState = 'priced' | 'partial' | 'unpriced' | 'subscription' | 'unknown';
 
 export interface MergedModel {

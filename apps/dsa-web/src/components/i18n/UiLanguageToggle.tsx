@@ -78,7 +78,7 @@ export const UiLanguageToggle: React.FC<UiLanguageToggleProps> = ({
         {isRailVariant ? (
           <span className={labelClassName}>{language === 'zh' ? t('language.short.zh') : language === 'zh-TW' ? t('language.short.zhTW') : t('language.short.en')}</span>
         ) : isNavVariant ? (
-          collapsed ? null : <span className="truncate text-[1.02rem] font-medium">{label}</span>
+          collapsed ? null : <span className={labelClassName ?? 'truncate text-[1.02rem] font-medium'}>{label}</span>
         ) : (
           <span className="hidden sm:inline">{label}</span>
         )}

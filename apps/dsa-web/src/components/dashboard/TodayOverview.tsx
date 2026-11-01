@@ -10,9 +10,9 @@ import { stockQuoteKey } from '../../hooks/useStockQuotes';
 import { HOME_TEXT, formatHomeText, formatMonthDay, type HomeText } from '../../locales/homeText';
 import { useMarketIndexStore } from '../../stores/marketIndexStore';
 import type { MarketReviewPayload } from '../../types/analysis';
-import type { DecisionSignalSummaryResponse } from '../../types/decisionSignals';
+import type { DecisionSignalListParams, DecisionSignalSummaryResponse } from '../../types/decisionSignals';
 import type { PortfolioSnapshotResponse } from '../../types/portfolio';
-import { formatMoneyValue, formatNumber, formatPercent, NO_VALUE } from '../../utils/format';
+import { currencyUnitLabel, formatMoneyValue, formatNumber, formatPercent, NO_VALUE } from '../../utils/format';
 import { Card, Change, Skeleton } from '../common';
 import { StockRowLines } from '../history/StockBarItem';
 import type { HomeWatchlistRow } from '../watchlist/HomeStockWorkspace';
@@ -26,6 +26,25 @@ const MARKET_REVIEW_CODE = 'MARKET';
 
 const REDUCE_SIGNALS_PATH = '/decision-signals?holding=1&action=reduce';
 const STOP_TRIGGERED_SIGNALS_PATH = '/decision-signals?holding=1&stop=triggered';
+// The reduce count must come from the same list query the destination page runs for
+// REDUCE_SIGNALS_PATH (DecisionSignalsPage toListParams with holding=1, action=reduce and the
+// default status=active), otherwise the tile and the page disagree (summary counted 12, list 13).
+// Keep these params in sync with toListParams; only page/pageSize differ because we read `total`.
+const REDUCE_COUNT_LIST_PARAMS: DecisionSignalListParams = {
+  holdingOnly: true,
+  action: 'reduce',
+  status: 'active',
+  groupLatest: true,
+  sort: 'priority',
+  page: 1,
+  pageSize: 1,
+};
+
+/** NT$ prefix plus the plain amount, matching the portfolio page; em dash when there is no reading. */
+const formatOverviewMoney = (value?: number | null): string => {
+  const amount = formatMoneyValue(value, OVERVIEW_DISPLAY_CURRENCY, {});
+  return amount === NO_VALUE ? NO_VALUE : `${currencyUnitLabel(OVERVIEW_DISPLAY_CURRENCY)} ${amount}`;
+};
 
 type LoadState = 'loading' | 'ready' | 'failed';
 
@@ -179,6 +198,8 @@ export const TodayOverview: React.FC<TodayOverviewProps> = ({ watchlistRows, quo
   const [snapshotState, setSnapshotState] = useState<LoadState>('loading');
   const [signalSummary, setSignalSummary] = useState<DecisionSignalSummaryResponse | null>(null);
   const [signalState, setSignalState] = useState<LoadState>('loading');
+  const [reduceCount, setReduceCount] = useState<number | null>(null);
+  const [reduceState, setReduceState] = useState<LoadState>('loading');
   const [verdict, setVerdict] = useState<{ id: number; payload: MarketReviewPayload } | null>(null);
 
   useEffect(() => {
@@ -206,6 +227,16 @@ export const TodayOverview: React.FC<TodayOverviewProps> = ({ watchlistRows, quo
       .catch(() => {
         if (active) setSignalState('failed');
       });
+    // 待減碼：與目的頁同一支 list 查詢的 total；失敗顯示 —，不退回 summary 的數字（口徑不同）。
+    decisionSignalsApi.list(REDUCE_COUNT_LIST_PARAMS)
+      .then((data) => {
+        if (!active) return;
+        setReduceCount(data.total);
+        setReduceState('ready');
+      })
+      .catch(() => {
+        if (active) setReduceState('failed');
+      });
     // 今日判讀卡：最新一份大盤複盤的 payload；取不到就不渲染這張卡。
     historyApi.getList({ stockCode: MARKET_REVIEW_CODE, reportType: 'market_review', page: 1, limit: 1 })
       .then(async (list) => {
@@ -232,7 +263,6 @@ export const TodayOverview: React.FC<TodayOverviewProps> = ({ watchlistRows, quo
   );
   // 還沒抓過（undefined）也算載入中，避免第一個 render 就閃「—」。
   const isLoadingIndices = !usIndices || (usIndices.isLoading && usIndices.items.length === 0);
-  const reduceCount = signalSummary ? signalSummary.actions?.reduce ?? 0 : null;
   const stopUnavailable = signalSummary?.stopPriceUnavailableCount ?? 0;
   const dayPnl = snapshot?.consolidatedDayPnlBase;
   const updatedRows = useMemo(
@@ -258,22 +288,23 @@ export const TodayOverview: React.FC<TodayOverviewProps> = ({ watchlistRows, quo
           loading={snapshotState === 'loading'}
           value={(
             <Change value={dayPnl}>
-              {formatMoneyValue(dayPnl, OVERVIEW_DISPLAY_CURRENCY, 0)}
+              {formatOverviewMoney(dayPnl)}
             </Change>
           )}
+          hint={homeText.dayPnlHint}
           onClick={() => navigate('/portfolio')}
         />
         <SummaryTile
           testId="overview-tile-market-value"
           label={t('overview.marketValue')}
           loading={snapshotState === 'loading'}
-          value={formatMoneyValue(snapshot?.consolidatedMarketValueBase, OVERVIEW_DISPLAY_CURRENCY, 0)}
+          value={formatOverviewMoney(snapshot?.consolidatedMarketValueBase)}
           onClick={() => navigate('/portfolio')}
         />
         <SummaryTile
           testId="overview-tile-reduce"
           label={t('overview.pendingReduce')}
-          loading={signalState === 'loading'}
+          loading={reduceState === 'loading'}
           value={formatNumber(reduceCount, 0)}
           onClick={() => navigate(REDUCE_SIGNALS_PATH)}
         />

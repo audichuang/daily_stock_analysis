@@ -27,7 +27,7 @@ const categoryTitleMap: Record<UiLanguage, Record<SystemConfigCategory, string>>
     data_source: '資料來源',
     ai_model: 'AI 模型',
     notification: '通知管道',
-    system: '系統設定',
+    system: '排程與系統',
     agent: 'Agent 設定',
     backtest: '回測設定',
     uncategorized: '其他',

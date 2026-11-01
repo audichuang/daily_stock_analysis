@@ -5,6 +5,7 @@ import { stocksApi, type DossierSummary, type DossierTone } from '../../api/stoc
 import { getParsedApiError } from '../../api/error';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import { cn } from '../../utils/cn';
+import { formatPercent } from '../../utils/format';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { Button } from '../common/Button';
 import { Tooltip as HintTooltip } from '../common/Tooltip';
@@ -22,7 +23,8 @@ const TONE_CLASS: Record<DossierTone, string> = {
 const VERDICT_KEYS = ['fundamental', 'chips', 'technical', 'valuation'] as const;
 
 const fmtPrice = (v: number) => v.toLocaleString(undefined, { maximumFractionDigits: 2 });
-const fmtPct = (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`;
+// formatPercent writes negatives with U+2212 like the rest of the board.
+const fmtPct = (v: number) => formatPercent(v, 1);
 
 function levelRange(near: NearLevel): string {
   const { low, high } = near.level;

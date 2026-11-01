@@ -17,7 +17,7 @@ import {
   PORTFOLIO_TEXT,
 } from '../locales/featureText';
 import { PORTFOLIO_W10_TEXT } from '../locales/portfolioText';
-import { formatMoneyValue, formatPrice, MINUS_SIGN, NO_VALUE, toDateInputValue } from './format';
+import { currencyUnitLabel, formatMoneyValue, formatPrice, MINUS_SIGN, NO_VALUE, toDateInputValue } from './format';
 import { stockCodeMatchKey } from './stockCode';
 
 export type FxRefreshFeedback = {
@@ -34,6 +34,23 @@ export function getTodayIso(): string {
 export function formatMoney(value: number | undefined | null, currency?: string): string {
   if (value == null || !Number.isFinite(value)) return NO_VALUE;
   return formatMoneyValue(value, currency);
+}
+
+/**
+ * Aggregate amount (market value, P&L, subtotals) with a unit prefix: "NT$ 829,917", "US$ 1,234.50".
+ * TWD/JPY/KRW carry no decimals; prices and single trades keep using formatMoney.
+ */
+export function formatAmount(
+  value: number | undefined | null,
+  currency?: string | null,
+  options: { signed?: boolean } = {},
+): string {
+  if (value == null || !Number.isFinite(value)) return NO_VALUE;
+  const digits = formatMoneyValue(value, currency ?? undefined, {});
+  // Negative values already carry MINUS_SIGN; a value that rounds to zero gets no sign.
+  const sign = options.signed && value > 0 && /[1-9]/.test(digits) ? '+' : '';
+  const unit = currencyUnitLabel(currency);
+  return `${unit ? `${unit} ` : ''}${sign}${digits}`;
 }
 
 export function formatPct(value: number | undefined | null): string {
@@ -60,7 +77,7 @@ export function formatPositionPrice(row: PortfolioPositionItem): string {
 
 export function formatPositionMoney(value: number, row: PortfolioPositionItem): string {
   if (!hasPositionPrice(row)) return NO_VALUE;
-  return formatMoney(value, row.valuationCurrency);
+  return formatAmount(value, row.valuationCurrency);
 }
 
 export function getPositionPriceLabel(row: PortfolioPositionItem, language: UiLanguage = 'zh'): string {

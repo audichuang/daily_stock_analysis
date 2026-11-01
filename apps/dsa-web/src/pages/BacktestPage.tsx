@@ -54,6 +54,7 @@ import {
 import { formatNumber, formatPercent, formatPrice, NO_VALUE } from '../utils/format';
 import { getMarketPhaseSummaryLabel } from '../utils/marketPhase';
 import { marketToneClass } from '../utils/marketTone';
+import { getStockMarketBucket } from '../utils/stockName';
 
 const BACKTEST_INPUT_CLASS =
   'input-surface input-focus-glow h-10 w-full rounded-xl border bg-transparent px-3 text-sm transition-all focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
@@ -630,6 +631,9 @@ const BacktestPage: React.FC = () => {
     const key = String(row.analysisHistoryId);
     const expanded = expandedKey === key;
     const actionLabel = getDecisionActionLabel(row.action, row.actionLabel, null, null, actionLabels);
+    // US tickers lead with the code (full names get truncated on phones); other markets keep the name first.
+    const isUsTicker = getStockMarketBucket(row.code) === 'us';
+    const usSecondaryName = isUsTicker && row.stockName && row.stockName !== row.code ? row.stockName : '';
     return (
       <div>
         <button
@@ -640,7 +644,16 @@ const BacktestPage: React.FC = () => {
           className="flex w-full cursor-pointer flex-col gap-1 px-3 py-2 text-left"
         >
           <span className="flex items-center justify-between gap-2">
-            <span className="min-w-0 truncate font-medium text-foreground">{row.stockName || row.code}</span>
+            {isUsTicker ? (
+              <span className="flex min-w-0 items-baseline gap-1.5">
+                <span className="shrink-0 font-medium text-foreground">{row.code}</span>
+                {usSecondaryName ? (
+                  <span className="min-w-0 truncate text-xs text-muted-text">{usSecondaryName}</span>
+                ) : null}
+              </span>
+            ) : (
+              <span className="min-w-0 truncate font-medium text-foreground">{row.stockName || row.code}</span>
+            )}
             <ReturnValue value={row.actualReturnPct} />
           </span>
           <span className="flex items-center justify-between gap-2 text-xs text-secondary-text">

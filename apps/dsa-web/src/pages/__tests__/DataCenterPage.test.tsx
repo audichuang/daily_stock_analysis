@@ -176,11 +176,11 @@ describe('DataCenterPage', () => {
     // 台股、美股日 K 與持股帳本正常；news 未檢查；screening 未啟用（港股收在其他市場，不計）。
     expect(value('正常')).toBe(3);
     expect(value('尚未檢查')).toBe(1);
-    expect(value('未啟用')).toBe(1);
+    expect(value('未設定／未開啟')).toBe(1);
     expect(value('異常')).toBe(0);
     const tableRows = within(screen.getByRole('table', { name: '市場資料狀態' })).getAllByRole('row').length - 1
       + within(screen.getByRole('table', { name: '其他資料' })).getAllByRole('row').length - 1;
-    expect(value('正常') + value('尚未檢查') + value('未啟用') + value('異常')).toBe(tableRows);
+    expect(value('正常') + value('尚未檢查') + value('未設定／未開啟') + value('異常')).toBe(tableRows);
     expect(group.getByText('共 5 項（台股、美股與系統）')).toBeInTheDocument();
   });
 
@@ -196,6 +196,23 @@ describe('DataCenterPage', () => {
     const conclusion = await screen.findByTestId('data-center-conclusion');
     expect(conclusion).toHaveTextContent('1 項尚未被呼叫過，休市或首次啟動時屬正常');
     expect(within(conclusion).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('uses the stat card unchecked count in the muted line, including system rows', async () => {
+    getOverview.mockResolvedValue({
+      ...overview,
+      datasets: [
+        { ...healthyKline, coverage: { markets: { tw: market('ok', 'marketdb'), us: market('unknown', null) } } },
+        { ...baseDataset, dataset: 'news.events', status: 'unknown', warnings: ['runtime_probe_not_performed'] },
+      ],
+    });
+    renderPage();
+    const conclusion = await screen.findByTestId('data-center-conclusion');
+    const group = within(screen.getByTestId('metric-group'));
+    const unchecked = Number(group.getByText('尚未檢查').parentElement?.querySelector('[data-metric-value]')?.textContent);
+    // US daily K (Taiwan/US table) plus news events (system table): the card counts both.
+    expect(unchecked).toBe(2);
+    expect(conclusion).toHaveTextContent(`${unchecked} 項尚未被呼叫過`);
   });
 
   it('puts Taiwan and US first and folds other markets away', async () => {

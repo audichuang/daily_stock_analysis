@@ -1369,6 +1369,19 @@ const DecisionSignalsPage: React.FC = () => {
     : [];
   const statsDecidable = outcomeStats ? outcomeStats.hit + outcomeStats.miss : 0;
   const filteredCount = clientStopFilter ? tableItems.length : total;
+  // Client-side stop filter only sees loaded rows, so backend pages don't apply. The backend sorts
+  // stop-hit rows first, so more may exist only while every loaded row is still a stop hit.
+  const showPagination = !clientStopFilter && totalPages > 1;
+  const showLoadMore = clientStopFilter
+    ? hasMorePages && loadedItems.length > 0 && tableItems.length === loadedItems.length
+    : hasMorePages && tableItems.length > 0;
+  const hasUrlFilters = urlFilters.holdingOnly || Boolean(urlFilters.action) || urlFilters.stopTriggered;
+  // When the backend lacks stopTriggered, stop=triggered falls back to a holdings query, so use the generic filtered copy.
+  const emptyTitle = clientStopFilter
+    ? signalsText.emptyStopTriggered
+    : hasUrlFilters
+      ? signalsText.emptyFiltered
+      : t('decisionSignals.emptyTitle');
   const filterHeadline = appliedSourceReportId || loading
     ? undefined
     : urlFilters.stopTriggered && !stopFieldMissing
@@ -1521,7 +1534,7 @@ const DecisionSignalsPage: React.FC = () => {
           ) : null}
 
           {historyCandidatesLoaded && stockCandidates.length > 0 ? (
-            <div className="flex items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 pr-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [mask-image:linear-gradient(to_right,black_calc(100%-24px),transparent)] [-webkit-mask-image:linear-gradient(to_right,black_calc(100%-24px),transparent)]">
               <span className="shrink-0 text-xs text-muted-text">
                 {stockCandidateMode === 'history'
                   ? t('decisionSignals.stockContextRecent')
@@ -1626,9 +1639,9 @@ const DecisionSignalsPage: React.FC = () => {
         ) : null}
 
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-secondary-text">{t('decisionSignals.total', { total })}</p>
+          <p className="text-sm text-secondary-text">{t('decisionSignals.total', { total: filteredCount })}</p>
           {loading && items.length > 0 ? <span className="text-xs text-secondary-text">{t('common.loading')}...</span> : null}
-          {totalPages > 1 ? (
+          {showPagination ? (
             <div data-testid="signal-pagination-top" className="hidden md:block">
               <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
             </div>
@@ -1639,9 +1652,17 @@ const DecisionSignalsPage: React.FC = () => {
           <DecisionSignalTableSkeleton />
         ) : tableItems.length === 0 ? (
           <EmptyState
-            title={t('decisionSignals.emptyTitle')}
-            description={t('decisionSignals.emptyDescription')}
+            title={emptyTitle}
+            description={hasUrlFilters ? undefined : t('decisionSignals.emptyDescription')}
             icon={<Activity className="h-7 w-7" />}
+            action={hasUrlFilters ? (
+              <Button
+                variant="secondary"
+                onClick={() => updateFilters({ holdingOnly: false, action: '', stopTriggered: false })}
+              >
+                {signalsText.clearFilters}
+              </Button>
+            ) : undefined}
           />
         ) : (
           <DecisionSignalTable
@@ -1657,11 +1678,14 @@ const DecisionSignalsPage: React.FC = () => {
           />
         )}
 
-        <div data-testid="signal-pagination-bottom" className="hidden md:block">
-          <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
-        </div>
-        {hasMorePages && tableItems.length > 0 ? (
-          <div className="md:hidden">
+        {!clientStopFilter ? (
+          <div data-testid="signal-pagination-bottom" className="hidden md:block">
+            <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
+          </div>
+        ) : null}
+        {showLoadMore ? (
+          // Desktop normally pages; the client-side stop filter has no pagination, so load more is its only way on.
+          <div className={clientStopFilter ? undefined : 'md:hidden'}>
             <Button
               variant="secondary"
               className="w-full"

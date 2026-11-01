@@ -383,6 +383,45 @@ describe('Shell', () => {
     expect(document.title).toBe('Q3 outlook');
   });
 
+  it('uses the shell route name as document.title on /calendar', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    document.title = 'stale';
+    render(
+      <MemoryRouter initialEntries={['/calendar']}>
+        <UiLanguageProvider>
+          <ThemeProvider>
+            <Shell>
+              <div>calendar page</div>
+            </Shell>
+          </ThemeProvider>
+        </UiLanguageProvider>
+      </MemoryRouter>
+    );
+    expect(document.title).toBe('Calendar');
+    expect(document.title).not.toContain(' - DSA');
+  });
+
+  it('titles the mobile "more" drawer "More"', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    viewport.mobile = true;
+    render(
+      <MemoryRouter initialEntries={['/portfolio']}>
+        <UiLanguageProvider>
+          <ThemeProvider>
+            <Shell>
+              <div>page content</div>
+            </Shell>
+          </ThemeProvider>
+        </UiLanguageProvider>
+      </MemoryRouter>
+    );
+    const tabs = screen.getByRole('navigation', { name: 'Bottom tabs' });
+    fireEvent.click(within(tabs).getByRole('button', { name: 'More' }));
+    const drawer = screen.getByRole('dialog', { name: 'More' });
+    expect(within(drawer).getByRole('heading', { level: 2 })).toHaveTextContent('More');
+    expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
+  });
+
   it('portals page actions into the mobile shell header only', () => {
     const page = <ShellHeaderActions><button type="button">new rule</button></ShellHeaderActions>;
     viewport.mobile = true;

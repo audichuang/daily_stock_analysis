@@ -148,9 +148,65 @@ describe('FundsPage', () => {
     expect(screen.getByTestId('funds-mobile-row').closest('li')).toHaveAttribute('data-row-highlighted', 'true');
     expect(screen.getByTestId('location-search')).toHaveTextContent('fund=18480065');
 
+    const detailCalls = () => get.mock.calls.filter(([url]) => url === '/api/v1/funds/18480065').length;
+    const callsBeforeBack = detailCalls();
     fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));
     expect(screen.queryByTestId('funds-detail')).not.toBeInTheDocument();
     expect(document.body).not.toHaveClass('overflow-hidden');
+    // Back drops ?fund= so a refresh or shared link does not reopen the layer.
+    expect(screen.getByTestId('location-search').textContent).not.toContain('fund=');
+    // The selection survives in state: the same fund stays selected, so its detail is not refetched.
+    await waitFor(() => expect(screen.getByTestId('funds-mobile-row')).toBeInTheDocument());
+    expect(detailCalls()).toBe(callsBeforeBack);
+  });
+
+  it('clears ?fund= on Back after a deep link, while the deep link itself still opens the layer', async () => {
+    viewport.narrow = true;
+    renderPage('/funds?fund=18480065');
+    const detail = await screen.findByTestId('funds-detail');
+    expect(screen.getByTestId('location-search')).toHaveTextContent('fund=18480065');
+    // The sticky header carries the safe-area padding; the scroll container no longer leaves a top gap.
+    expect(detail.className).toContain('pt-0');
+    expect(detail.className).not.toContain('safe-area-inset-top');
+    expect(screen.getByTestId('funds-detail-header').className).toContain('pt-[env(safe-area-inset-top)]');
+
+    await screen.findByText('+157.99%');
+    const detailCalls = () => get.mock.calls.filter(([url]) => url === '/api/v1/funds/18480065').length;
+    const callsBeforeBack = detailCalls();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));
+    expect(screen.queryByTestId('funds-detail')).not.toBeInTheDocument();
+    expect(screen.getByTestId('location-search').textContent).not.toContain('fund=');
+    // The deep-linked fund stays selected in state after ?fund= is dropped, so nothing is refetched.
+    await waitFor(() => expect(screen.getByTestId('funds-mobile-row')).toBeInTheDocument());
+    expect(detailCalls()).toBe(callsBeforeBack);
+  });
+
+  it('keeps the tapped fund highlighted on the phone list after Back, but never marks the auto-pick', async () => {
+    const second = { fund_id: '73990253', fund_name: '统一奔腾基金' };
+    get.mockImplementation((url: string) => {
+      if (url === '/api/v1/funds/holdings') {
+        const data = holdingsResponse(450906);
+        // Smaller market value, so it sorts second and is not the auto-selected first fund.
+        return Promise.resolve({ data: { ...data, items: [data.items[0], { ...data.items[0], id: 2, ...second, market_value: 100000 }] } });
+      }
+      if (url === `/api/v1/funds/${second.fund_id}`) return Promise.resolve({ data: { ...detailResponse, fund_id: second.fund_id, name: second.fund_name } });
+      if (url === `/api/v1/funds/${second.fund_id}/nav`) return Promise.resolve({ data: { fund_id: second.fund_id, points: [] } });
+      if (url === `/api/v1/funds/${second.fund_id}/holdings`) return Promise.resolve({ data: { fund_id: second.fund_id, items: [], error: null } });
+      return route(url);
+    });
+    viewport.narrow = true;
+    renderPage();
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/funds/18480065'));
+    const rowFor = (name: string) => within(screen.getByTestId('data-table-mobile')).getByText(name).closest('li');
+    // Reverse: the auto-selected first fund is not a choice the user made, so the phone list leaves it unmarked.
+    expect(rowFor('安联台湾科技基金')).not.toHaveAttribute('data-row-highlighted');
+
+    fireEvent.click(within(screen.getByTestId('data-table-mobile')).getByText(second.fund_name));
+    await screen.findByTestId('funds-detail');
+    fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));
+    expect(screen.queryByTestId('funds-detail')).not.toBeInTheDocument();
+    expect(rowFor(second.fund_name)).toHaveAttribute('data-row-highlighted', 'true');
+    expect(rowFor('安联台湾科技基金')).not.toHaveAttribute('data-row-highlighted');
   });
 
   it('shows day P/L and total return on mobile rows and keeps edit/delete in the row menu', async () => {
@@ -165,6 +221,10 @@ describe('FundsPage', () => {
     renderPage();
     const row = await screen.findByTestId('funds-mobile-row');
     expect(row).toHaveTextContent('Day P/L \u221218,928（\u22124.28%）');
+    // Only the label may be cut off; the value and % never sit inside a truncating node.
+    const dayValue = within(row).getByText('\u221218,928（\u22124.28%）');
+    expect(dayValue).toHaveClass('shrink-0', 'whitespace-nowrap');
+    expect(dayValue.closest('.truncate')).toBeNull();
     expect(row).toHaveTextContent('Total +94.36%');
     expect(within(row).queryByRole('button', { name: 'Edit holding' })).not.toBeInTheDocument();
     fireEvent.click(within(row).getByRole('button', { name: 'More actions' }));

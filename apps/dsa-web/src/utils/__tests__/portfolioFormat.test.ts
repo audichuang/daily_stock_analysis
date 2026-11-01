@@ -4,6 +4,7 @@ import {
   computeTradeAmount,
   formatBrokerLabel,
   formatBrokerOptionLabel,
+  formatAmount,
   formatLossPct,
   formatMoney,
   formatPendingGroupLabel,
@@ -50,9 +51,39 @@ describe('portfolioFormat', () => {
     expect(formatSignedPct(-1.2)).toBe('\u22121.20%');
   });
 
+  it('formats aggregate amounts with NT$/US$ prefixes and currency-specific decimals', () => {
+    // TWD aggregates drop decimals (mutation guard: two decimals here would read "NT$ 829,916.75").
+    expect(formatAmount(829916.75, 'TWD')).toBe('NT$ 829,917');
+    expect(formatAmount(829916.75, 'twd')).toBe('NT$ 829,917');
+    expect(formatAmount(1234.5, 'USD')).toBe('US$ 1,234.50');
+    // Other currencies keep their code as prefix and two decimals.
+    expect(formatAmount(123, 'CNY')).toBe('CNY 123.00');
+    expect(formatAmount(1234.5)).toBe('1,234.50');
+    expect(formatAmount(null, 'TWD')).toBe('—');
+    expect(formatAmount(Number.NaN, 'TWD')).toBe('—');
+  });
+
+  it('signs aggregate amounts with "+" and the unified minus sign', () => {
+    expect(formatAmount(619805.4, 'TWD', { signed: true })).toBe('NT$ +619,805');
+    expect(formatAmount(-619805.4, 'TWD', { signed: true })).toBe('NT$ \u2212619,805');
+    expect(formatAmount(12.5, 'USD', { signed: true })).toBe('US$ +12.50');
+    expect(formatAmount(-12.5, 'USD', { signed: true })).toBe('US$ \u221212.50');
+    // Unsigned positives get no "+"; values rounding to zero get no sign either way.
+    expect(formatAmount(12.5, 'USD')).toBe('US$ 12.50');
+    expect(formatAmount(0.4, 'TWD', { signed: true })).toBe('NT$ 0');
+    expect(formatAmount(-0.4, 'TWD', { signed: true })).toBe('NT$ 0');
+  });
+
+  it('keeps decimals for prices and single trades formatted with formatMoney', () => {
+    // Reverse guard: formatAmount's TWD rounding must not leak into formatMoney.
+    expect(formatMoney(50.35, 'TWD')).toBe('TWD 50.35');
+    expect(formatMoney(829916.75, 'TWD')).toBe('TWD 829,916.75');
+  });
+
   it('formats position price fields based on price availability', () => {
     expect(formatPositionPrice(pricedPosition)).toBe('321.1235');
     expect(formatPositionMoney(123, pricedPosition)).toBe('CNY 123.00');
+    expect(formatPositionMoney(829916.75, { ...pricedPosition, valuationCurrency: 'TWD' })).toBe('NT$ 829,917');
     expect(getPositionPriceLabel(pricedPosition)).toBe('实时价 · longbridge');
 
     // 報價幣別決定精度，帳戶基準幣別不影響。

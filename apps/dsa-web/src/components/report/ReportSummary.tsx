@@ -34,6 +34,8 @@ interface ReportSummaryProps {
 /**
  * 完整報告：結論 → 事件 → 關鍵價位與 K 線 → 改判條件 → 事件展望 → 財報 → 證據與新聞，
  * 資料品質與來源收合在最後。先看價位再看財報。
+ * 無新聞護欄擋下價位（levelsBlocked）時，首屏的關鍵價位條與「停損 A → B」比較、
+ * ReportStrategy 與 K 線價位線一起不顯示。
  */
 export const ReportSummary: React.FC<ReportSummaryProps> = ({
   data,
@@ -79,6 +81,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
         meta={meta}
         summary={summary}
         details={details}
+        strategy={levelsBlocked ? undefined : strategy}
         isHistory={isHistory}
         notice={gaps.notice}
         watchlist={watchlist}

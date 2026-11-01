@@ -131,4 +131,28 @@ describe('buildConclusion', () => {
     expect(message).toBe('台股 即時報價 無法使用、台股 日 K 無法使用、台股 指數日線 無法使用 等 5 項');
     expect(message).not.toContain('財務資料');
   });
+
+  // Seven unchecked Taiwan/US rows plus one unchecked row outside the focus markets (other data).
+  const sevenFocusPlusOther = (otherStatus: string): DataRow[] => [
+    ...['quote.realtime', 'kline.daily', 'index.daily', 'financial.snapshot'].map((dataset) => row(dataset, 'unknown', { id: `${dataset}:tw` })),
+    ...['quote.realtime', 'kline.daily', 'market.overview'].map((dataset) => row(dataset, 'unknown', { id: `${dataset}:us`, marketKey: 'us', root: 'us' })),
+    row('news.events', otherStatus, { marketKey: null, root: 'other' }),
+  ];
+
+  it('quotes the same unchecked count as the stat card in the muted note', () => {
+    const rows = sevenFocusPlusOther('unknown');
+    const counted = countRows(rows).unchecked;
+    expect(counted).toBe(8);
+    const conclusion = buildConclusion(rows, 'now', text, counted);
+    expect(conclusion.variant).toBe('note');
+    expect(conclusion.message).toContain('8 項');
+    expect(conclusion.message).toBe(`${counted} 項尚未被呼叫過，休市或首次啟動時屬正常`);
+  });
+
+  it('still judges severity on Taiwan/US only: an unavailable other row does not turn the conclusion red', () => {
+    const rows = sevenFocusPlusOther('unavailable');
+    const conclusion = buildConclusion(rows, 'now', text, countRows(rows).unchecked);
+    expect(conclusion.variant).toBe('note');
+    expect(conclusion.variant).not.toBe('danger');
+  });
 });

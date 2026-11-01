@@ -128,6 +128,10 @@ interface HomeStockWorkspaceProps {
   onSaveWatchlistGroups?: (groups: WatchlistGroup[]) => Promise<void>;
   /** 釘頂複盤列標題裡的市場，例如「美股」；沒給就只寫日期。 */
   marketReviewRegionLabel?: string;
+  /** 釘頂複盤列的交易日標籤，例如「美股 10/30」；有給就取代市場＋建立日。 */
+  marketReviewSessionLabel?: string;
+  /** false 時外層不套 glass-card，給已有底色的手機抽屜用。 */
+  framed?: boolean;
   /** 手機抽屜用：有給就在頁籤上方顯示「清單」標題與關閉鈕。 */
   onClose?: () => void;
 }
@@ -403,6 +407,8 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
   watchlistGroups = NO_WATCHLIST_GROUPS,
   onSaveWatchlistGroups,
   marketReviewRegionLabel,
+  marketReviewSessionLabel,
+  framed = true,
   onClose,
 }) => {
   const { t, language } = useUiLanguage();
@@ -619,6 +625,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
       isMarketReview
       marketLightLabel={marketLightLabel}
       marketReviewRegionLabel={marketReviewRegionLabel}
+      marketReviewSessionLabel={marketReviewSessionLabel}
     />
   ) : null;
 
@@ -904,7 +911,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
   return (
     <aside
       data-testid="home-stock-workspace"
-      className={`glass-card home-stock-scroll-shell flex min-h-0 flex-1 flex-col ${className}`}
+      className={`${framed ? 'glass-card ' : ''}home-stock-scroll-shell flex min-h-0 flex-1 flex-col ${className}`}
     >
       {drawerHeader}
       {/* Tabs stay pinned at the top of one shared shell so switching tabs never moves the frame. */}
