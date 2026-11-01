@@ -2590,10 +2590,8 @@ Output the report content directly, no extra commentary.
 - 全文必須使用繁體中文（台灣用語），不得使用簡體字或中國大陸用語。
 - 即使下方注入的資料、表格或策略藍圖出現簡體字，正文也必須改寫為繁體中文輸出。
 
-【重要】輸出要求：
-- 必須輸出純 Markdown 文字格式
-- 禁止輸出 JSON 格式
-- 禁止輸出程式碼區塊
+輸出要求：
+- 輸出純 Markdown 文字，不含 JSON 與程式碼區塊
 - emoji 僅在標題處少量使用（每個標題最多 1 個）
 - {workflow_hint_tw}
 - 不要重複列出已由系統注入的表格資料；正文負責解釋表格背後的含義
@@ -2645,10 +2643,8 @@ Output the report content directly, no extra commentary.
         # A 股场景使用中文提示语
         return f"""你是一位专业的{self._get_market_scope_name('zh')}分析师，请根据以下数据生成一份结构化的{self._get_market_scope_name('zh')}大盘复盘报告。
 
-【重要】输出要求：
-- 必须输出纯 Markdown 文本格式
-- 禁止输出 JSON 格式
-- 禁止输出代码块
+输出要求：
+- 输出纯 Markdown 文本，不含 JSON 与代码块
 - emoji 仅在标题处少量使用（每个标题最多1个）
 - {workflow_hint}
 - 不要重复列出已由系统注入的表格数据；正文负责解释表格背后的含义

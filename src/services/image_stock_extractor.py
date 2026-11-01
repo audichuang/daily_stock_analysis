@@ -316,7 +316,7 @@ def _call_litellm_vision(image_b64: str, mime_type: str, api_key: Optional[str] 
                 ],
             }
         ],
-        "max_tokens": 1024,
+        "max_tokens": 4096,
         "timeout": VISION_API_TIMEOUT,
     }
     effective_api_key = str(deployment_params.get("api_key") or key or "").strip()

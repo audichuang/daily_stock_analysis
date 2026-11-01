@@ -1567,7 +1567,7 @@ class SystemConfigService:
                         base_url=base_url,
                         timeout_seconds=timeout_seconds,
                         messages=[{"role": "user", "content": 'Return exactly this JSON object: {"status":"ok"}'}],
-                        max_tokens=64,
+                        max_tokens=1024,
                         extra={"response_format": {"type": "json_object"}, "client": client},
                     )
                     call_kwargs.pop("api_key", None)
@@ -1687,7 +1687,7 @@ class SystemConfigService:
                     base_url=base_url,
                     timeout_seconds=timeout_seconds,
                     messages=[{"role": "user", "content": 'Return exactly this JSON object: {"status":"ok"}'}],
-                    max_tokens=64,
+                    max_tokens=1024,
                     extra={"response_format": {"type": "json_object"}},
                 )
             )
@@ -1769,10 +1769,10 @@ class SystemConfigService:
                     base_url=base_url,
                     timeout_seconds=timeout_seconds,
                     messages=[{"role": "user", "content": "Call the dsa_probe_echo tool with text set to ok."}],
-                    max_tokens=64,
+                    max_tokens=1024,
                     extra={
                         "tools": tools,
-                        "tool_choice": {"type": "function", "function": {"name": "dsa_probe_echo"}},
+                        "tool_choice": "auto",
                     },
                 )
             )
@@ -1819,7 +1819,7 @@ class SystemConfigService:
                     base_url=base_url,
                     timeout_seconds=timeout_seconds,
                     messages=[{"role": "user", "content": "Reply with OK"}],
-                    max_tokens=32,
+                    max_tokens=1024,
                     extra={"stream": True},
                 )
             )
@@ -1884,7 +1884,7 @@ class SystemConfigService:
                             ],
                         }
                     ],
-                    max_tokens=32,
+                    max_tokens=1024,
                 )
             )
             latency_ms = int((time.perf_counter() - started_at) * 1000)

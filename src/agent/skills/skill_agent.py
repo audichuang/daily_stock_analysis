@@ -80,7 +80,7 @@ Return **only** a JSON object:
   "conditions_met": ["list of satisfied conditions"],
   "conditions_missed": ["list of unsatisfied conditions"],
   "score_adjustment": -20 to +20,
-  "reasoning": "2-3 sentence skill evaluation"
+  "summary": "2-3 sentence skill evaluation"
 }}
 """
 
@@ -124,6 +124,6 @@ Return **only** a JSON object:
             agent_name=self.agent_name,
             signal=parsed.get("signal"),  # None if missing — no silent default
             confidence=confidence_value,
-            reasoning=parsed.get("reasoning", ""),
+            reasoning=parsed.setdefault("reasoning", parsed.pop("summary", "")),
             raw_data=parsed,
         )

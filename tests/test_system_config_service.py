@@ -3964,7 +3964,7 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(payload["capability_results"]["tools"]["status"], "passed")
         self.assertEqual(mock_completion.call_count, 3)
         self.assertEqual(mock_completion.call_args_list[1].kwargs["response_format"], {"type": "json_object"})
-        self.assertEqual(mock_completion.call_args_list[2].kwargs["tool_choice"]["function"]["name"], "dsa_probe_echo")
+        self.assertEqual(mock_completion.call_args_list[2].kwargs["tool_choice"], "auto")
 
     @patch("litellm.completion")
     def test_test_llm_channel_json_capability_ignores_minimax_reasoning_blocks(self, mock_completion) -> None:

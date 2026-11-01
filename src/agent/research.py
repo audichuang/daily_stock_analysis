@@ -319,7 +319,7 @@ Return a JSON object:
             completion = self._call_text_completion(
                 messages,
                 temperature=0.3,
-                max_tokens=400,
+                max_tokens=4096,
                 timeout=step_timeout,
             )
             raw = completion["content"]
@@ -436,7 +436,7 @@ findings into a comprehensive, well-structured report.
 4. **Risk Factors** (if applicable)
 5. **Conclusion & Recommendations**
 
-Use Markdown formatting.  Be concise but thorough.
+Use Markdown formatting.
 """
         messages = [
             {"role": "system", "content": system},
@@ -450,7 +450,7 @@ Use Markdown formatting.  Be concise but thorough.
             completion = self._call_text_completion(
                 messages,
                 temperature=0.3,
-                max_tokens=2000,
+                max_tokens=8192,
                 timeout=step_timeout,
             )
             content = completion["content"]

@@ -81,12 +81,11 @@ Return **only** a JSON object:
     }
   ],
   "veto_buy": true|false,
-  "reasoning": "2-3 sentence overall risk assessment",
+  "summary": "2-3 sentence overall risk assessment",
   "signal_adjustment": "none|downgrade_one|downgrade_two|veto"
 }
 
-Important: be thorough but factual. Only flag risks backed by evidence \
-from your search results. Do NOT invent risks.
+Only flag risks backed by evidence from your search results.
 """
 
     def build_user_message(self, ctx: AgentContext) -> str:
@@ -121,7 +120,7 @@ from your search results. Do NOT invent risks.
             agent_name=self.agent_name,
             signal=_risk_to_signal(parsed.get("risk_level", "none")),
             confidence=float(parsed.get("risk_score", 50)) / 100.0,
-            reasoning=parsed.get("reasoning", ""),
+            reasoning=parsed.setdefault("reasoning", parsed.pop("summary", "")),
             raw_data=parsed,
         )
 

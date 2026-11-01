@@ -68,7 +68,7 @@ Return **only** a JSON object:
 {
   "signal": "strong_buy|buy|hold|sell|strong_sell",
   "confidence": 0.0-1.0,
-  "reasoning": "2-3 sentence summary of news/sentiment/capital-flow findings",
+  "summary": "2-3 sentence summary of news/sentiment/capital-flow findings",
   "risk_alerts": ["list", "of", "detected", "risks"],
   "positive_catalysts": ["list", "of", "catalysts"],
   "sentiment_label": "very_positive|positive|neutral|negative|very_negative",
@@ -112,7 +112,7 @@ Return **only** a JSON object:
             agent_name=self.agent_name,
             signal=parsed.get("signal", "hold"),
             confidence=float(parsed.get("confidence", 0.5)),
-            reasoning=parsed.get("reasoning", ""),
+            reasoning=parsed.setdefault("reasoning", parsed.pop("summary", "")),
             raw_data=parsed,
         )
 
