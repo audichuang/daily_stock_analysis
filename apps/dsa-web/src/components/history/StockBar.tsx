@@ -1,10 +1,12 @@
 import type React from 'react';
 import { useState, useCallback, useRef, useEffect, useId } from 'react';
-import { Badge, Button, ScrollArea } from '../common';
+import { Badge, Button, ConfirmDialog, InlineAlert, ScrollArea } from '../common';
 import { DashboardPanelHeader, DashboardStateBlock } from '../dashboard';
 import { StockBarItemComponent } from './StockBarItem';
+import type { StockQuote } from '../../api/stocks';
 import type { StockBarItem as StockBarItemType } from '../../types/analysis';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
+import { stockQuoteKey } from '../../hooks/useStockQuotes';
 
 interface StockBarProps {
   items: StockBarItemType[];
@@ -12,14 +14,19 @@ interface StockBarProps {
   selectedStockCode?: string;
   selectedRecordId?: number;
   onItemClick: (recordId: number) => void;
+  /** 失敗要 throw，才會顯示失敗提示。 */
   onDeleteStock?: (stockCode: string) => Promise<void> | void;
   isDeleting?: boolean;
   className?: string;
+  quotes?: Map<string, StockQuote>;
+  marketLightLabel?: string;
+  /** 市場篩選與排序列，由外層提供。 */
+  controls?: React.ReactNode;
 }
 
 /**
  * 个股栏组件：以股票维度展示历史分析记录，每只股票只显示一条。
- * 大盘复盘可作为 MARKET 项参与展示，并按最近分析时间排序。
+ * 大盤複盤固定在最上面；核取框只在編輯模式出現，刪除要確認。
  */
 export const StockBar: React.FC<StockBarProps> = ({
   items,
@@ -30,16 +37,23 @@ export const StockBar: React.FC<StockBarProps> = ({
   onDeleteStock,
   isDeleting = false,
   className = '',
+  quotes,
+  marketLightLabel,
+  controls,
 }) => {
   const { t } = useUiLanguage();
   const isMarketReview = (code: string) => code === 'MARKET';
+  const [editMode, setEditMode] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleteFailed, setDeleteFailed] = useState(false);
   const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set());
   const selectAllRef = useRef<HTMLInputElement>(null);
   const selectAllId = useId();
 
-  const deletableItems = items;
-  const selectedCount = [...selectedCodes].filter((code) => deletableItems.some((item) => item.stockCode === code)).length;
-  const allVisibleSelected = deletableItems.length > 0 && selectedCount === deletableItems.length;
+  const pinnedItems = items.filter((item) => isMarketReview(item.stockCode));
+  const orderedItems = [...pinnedItems, ...items.filter((item) => !isMarketReview(item.stockCode))];
+  const selectedCount = [...selectedCodes].filter((code) => items.some((item) => item.stockCode === code)).length;
+  const allVisibleSelected = items.length > 0 && selectedCount === items.length;
   const someVisibleSelected = selectedCount > 0 && !allVisibleSelected;
 
   useEffect(() => {
@@ -57,21 +71,26 @@ export const StockBar: React.FC<StockBarProps> = ({
     });
   }, []);
 
-  const toggleSelectAll = useCallback(() => {
-    setSelectedCodes((prev) => {
-      if (prev.size === deletableItems.length) return new Set();
-      return new Set(deletableItems.map((item) => item.stockCode));
-    });
-  }, [deletableItems]);
+  const toggleSelectAll = () => {
+    setSelectedCodes(allVisibleSelected ? new Set() : new Set(items.map((item) => item.stockCode)));
+  };
 
-  const handleDeleteSelected = useCallback(async () => {
+  const handleDeleteSelected = async () => {
+    setConfirmOpen(false);
     if (!onDeleteStock || selectedCodes.size === 0) return;
-    const codesToDelete = [...selectedCodes];
-    for (const code of codesToDelete) {
-      await onDeleteStock(code);
+    setDeleteFailed(false);
+    const remaining = new Set(selectedCodes);
+    try {
+      for (const code of selectedCodes) {
+        await onDeleteStock(code);
+        remaining.delete(code);
+      }
+    } catch {
+      setDeleteFailed(true);
     }
-    setSelectedCodes(new Set());
-  }, [onDeleteStock, selectedCodes]);
+    // 成功的取消勾選，失敗的留著讓使用者重試。
+    setSelectedCodes(remaining);
+  };
 
   return (
     <aside
@@ -79,32 +98,42 @@ export const StockBar: React.FC<StockBarProps> = ({
       className={`glass-card home-stock-scroll-shell flex min-h-0 flex-col ${className}`}
     >
       <ScrollArea
-        viewportClassName="p-4 overscroll-y-contain touch-pan-y"
+        viewportClassName="p-3 overscroll-y-contain touch-pan-y"
         testId="home-stock-bar-scroll"
       >
-        <div className="mb-4 space-y-3">
+        <div className="mb-3 space-y-2">
           <DashboardPanelHeader
-            className="mb-1"
+            className="mb-0"
             title={t('stockBar.title')}
             titleClassName="text-sm font-medium"
-            leading={(
-              <svg className="h-4 w-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-              </svg>
-            )}
             headingClassName="items-center"
-            actions={
-              selectedCount > 0 ? (
-                <Badge variant="info" size="sm" className="animate-in fade-in zoom-in duration-200">
-                  {t('common.selectedCount', { count: selectedCount })}
-                </Badge>
-              ) : items.length > 0 ? (
-                <span className="text-[11px] text-muted-text">{t('common.itemsCount', { count: items.length })}</span>
-              ) : undefined
-            }
+            actions={(
+              <div className="flex items-center gap-1.5">
+                {editMode && selectedCount > 0 ? (
+                  <Badge variant="info" size="sm">{t('common.selectedCount', { count: selectedCount })}</Badge>
+                ) : items.length > 0 ? (
+                  <span className="text-[11px] text-muted-text">{t('common.itemsCount', { count: items.length })}</span>
+                ) : null}
+                {items.length > 0 && onDeleteStock ? (
+                  <Button
+                    variant="ghost"
+                    size="xsm"
+                    aria-pressed={editMode}
+                    onClick={() => {
+                      setEditMode((current) => !current);
+                      setSelectedCodes(new Set());
+                      setDeleteFailed(false);
+                    }}
+                  >
+                    {editMode ? t('watchlist.editDone') : t('watchlist.edit')}
+                  </Button>
+                ) : null}
+              </div>
+            )}
           />
+          {controls}
 
-          {items.length > 0 && onDeleteStock && (
+          {editMode && items.length > 0 && onDeleteStock ? (
             <div className="flex items-center gap-2">
               <label
                 className="flex flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-1"
@@ -125,7 +154,7 @@ export const StockBar: React.FC<StockBarProps> = ({
               <Button
                 variant="danger-subtle"
                 size="xsm"
-                onClick={() => void handleDeleteSelected()}
+                onClick={() => setConfirmOpen(true)}
                 disabled={selectedCount === 0 || isDeleting}
                 isLoading={isDeleting}
                 className="disabled:!border-transparent disabled:!bg-transparent"
@@ -133,7 +162,14 @@ export const StockBar: React.FC<StockBarProps> = ({
                 {isDeleting ? t('common.deleting') : t('common.delete')}
               </Button>
             </div>
-          )}
+          ) : null}
+          {deleteFailed ? (
+            <InlineAlert
+              variant="danger"
+              message={t('stockBar.deleteFailed')}
+              className="rounded-xl px-3 py-2 text-xs shadow-none"
+            />
+          ) : null}
         </div>
 
         {isLoading ? (
@@ -154,32 +190,30 @@ export const StockBar: React.FC<StockBarProps> = ({
           />
         ) : (
           <div className="space-y-1.5">
-            {items.map((item) => {
+            {orderedItems.map((item) => {
               const code = item.stockCode || '';
               const isMarket = isMarketReview(code);
               const isSelected = selectedRecordId === item.id || selectedStockCode === code;
-              const isChecked = selectedCodes.has(code);
 
               return (
-                <div key={`${code}-${item.id}`} className="flex items-start gap-2 group">
-                  {onDeleteStock && (
-                    <div className="pt-5">
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => toggleCode(code)}
-                        disabled={isDeleting}
-                        className="h-3.5 w-3.5 cursor-pointer rounded border-subtle-hover bg-transparent accent-primary focus:ring-primary/30 disabled:opacity-50"
-                      />
-                    </div>
-                  )}
+                <div key={`${code}-${item.id}`} className="flex items-center gap-2 group">
+                  {editMode && onDeleteStock ? (
+                    <input
+                      type="checkbox"
+                      checked={selectedCodes.has(code)}
+                      onChange={() => toggleCode(code)}
+                      disabled={isDeleting}
+                      aria-label={t('history.deleteRecord', { name: item.stockName || code })}
+                      className="h-3.5 w-3.5 shrink-0 cursor-pointer rounded border-subtle-hover bg-transparent accent-primary focus:ring-primary/30 disabled:opacity-50"
+                    />
+                  ) : null}
                   <StockBarItemComponent
                     item={item}
                     isViewing={isSelected}
                     onClick={onItemClick}
-                    onDelete={onDeleteStock}
-                    isDeleting={isDeleting}
                     isMarketReview={isMarket}
+                    quote={isMarket ? undefined : quotes?.get(stockQuoteKey(code))}
+                    marketLightLabel={isMarket ? marketLightLabel : undefined}
                   />
                 </div>
               );
@@ -187,6 +221,15 @@ export const StockBar: React.FC<StockBarProps> = ({
           </div>
         )}
       </ScrollArea>
+      <ConfirmDialog
+        isOpen={confirmOpen}
+        title={t('stockBar.deleteConfirmTitle')}
+        message={t('stockBar.deleteConfirmMessage', { count: selectedCount })}
+        confirmText={t('common.delete')}
+        isDanger
+        onConfirm={() => void handleDeleteSelected()}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </aside>
   );
 };

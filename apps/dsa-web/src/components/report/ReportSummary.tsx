@@ -26,6 +26,8 @@ interface ReportSummaryProps {
     actionMessage: string | null;
   };
   onOpenRunFlow?: (recordId: number) => void;
+  /** 併入個股標題列的動作（完整報告、追問 AI、⋯）。 */
+  headerActions?: React.ReactNode;
 }
 
 /**
@@ -36,6 +38,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
   isHistory = false,
   watchlist,
   onOpenRunFlow,
+  headerActions,
 }) => {
   // 相容 AnalysisResult 和 AnalysisReport 兩種資料格式
   const report: AnalysisReport = 'report' in data ? data.report : data;
@@ -77,6 +80,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
         isHistory={isHistory}
         notice={gaps.notice}
         watchlist={watchlist}
+        headerActions={headerActions}
       />
 
       <EventGapCard eventGap={eventGap} currency={meta.currency} language={reportLanguage} />

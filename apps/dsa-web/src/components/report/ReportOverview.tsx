@@ -33,6 +33,7 @@ interface ReportOverviewProps {
     isActioning: boolean;
     actionMessage: string | null;
   };
+  headerActions?: React.ReactNode;
 }
 
 type BoardStatus = 'leading' | 'lagging';
@@ -195,6 +196,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   details,
   notice,
   watchlist,
+  headerActions,
 }) => {
   const { t } = useUiLanguage();
   const reportLanguage = normalizeReportLanguage(meta.reportLanguage);
@@ -305,11 +307,14 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
               <span className="text-xs text-muted-text">{formatDateTime(meta.createdAt)}</span>
             </div>
           </div>
-          <ShareImageButton
-            recordId={meta.id}
-            reportTitle={`${meta.stockName || meta.stockCode}-${meta.stockCode}`}
-            reportLanguage={reportLanguage}
-          />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {headerActions}
+            <ShareImageButton
+              recordId={meta.id}
+              reportTitle={`${meta.stockName || meta.stockCode}-${meta.stockCode}`}
+              reportLanguage={reportLanguage}
+            />
+          </div>
         </div>
 
         <div className="home-divider mt-3 border-t pt-3" data-testid="report-conclusion">

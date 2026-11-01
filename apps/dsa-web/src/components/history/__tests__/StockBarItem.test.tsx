@@ -19,23 +19,19 @@ const issue1600Item: StockBarItem = {
 };
 
 describe('StockBarItemComponent', () => {
-  it('keeps market phase in the meta row instead of the action row', () => {
+  it('renders two lines without a delete button or the market phase', () => {
     render(
       <StockBarItemComponent
         item={issue1600Item}
         isViewing={false}
         onClick={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
 
     const actions = screen.getByTestId('history-card-actions');
-    const meta = screen.getByTestId('history-card-meta');
-
     expect(within(actions).getByText('观望 62')).toBeInTheDocument();
-    expect(within(actions).getByRole('button', { name: /删除 贵州茅台股票股份有限公司 历史记录/ })).toBeInTheDocument();
-    expect(within(actions).queryByText('CN · 非交易日')).not.toBeInTheDocument();
-    expect(within(meta).getByText('CN · 非交易日')).toBeVisible();
+    expect(screen.queryByRole('button', { name: /删除/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('CN · 非交易日')).not.toBeInTheDocument();
 
     expect(screen.getByText('贵州茅台股票股份.')).toBeVisible();
     expect(
@@ -43,6 +39,32 @@ describe('StockBarItemComponent', () => {
         name: /^贵州茅台股票股份有限公司 600519 历史记录$/,
       }),
     ).toBeInTheDocument();
+  });
+
+  it('shows the US ticker first and hides the MARKET code on the market row', () => {
+    const { rerender } = render(
+      <StockBarItemComponent
+        item={{ ...issue1600Item, stockCode: 'AAPL', stockName: 'Apple' }}
+        isViewing={false}
+        onClick={vi.fn()}
+      />,
+    );
+    const meta = screen.getByTestId('history-card-meta');
+    expect(within(meta).getByText('Apple')).toBeInTheDocument();
+    expect(screen.getByText('AAPL')).toBeInTheDocument();
+
+    rerender(
+      <StockBarItemComponent
+        item={{ ...issue1600Item, stockCode: 'MARKET', stockName: '大盘复盘' }}
+        isViewing={false}
+        onClick={vi.fn()}
+        isMarketReview
+        marketLightLabel="台股 红灯"
+      />,
+    );
+    expect(screen.getByTestId('market-review-light')).toHaveTextContent('台股 红灯');
+    expect(screen.queryByText('MARKET')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '大盘复盘 历史记录' })).toBeInTheDocument();
   });
 
   it('uses structured action before legacy operation advice', () => {

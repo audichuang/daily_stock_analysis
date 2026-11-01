@@ -103,6 +103,11 @@ export interface PortfolioSnapshotResponse {
   dataQuality?: 'ok' | 'partial' | string;
   limitations?: string[];
   accounts: PortfolioAccountSnapshot[];
+  /** 今日損益（currency 幣別）；有一檔算不出就是 null。 */
+  dayPnl?: number | null;
+  displayCurrency?: string | null;
+  consolidatedMarketValueBase?: number | null;
+  consolidatedDayPnlBase?: number | null;
 }
 
 export interface PortfolioConcentrationItem {

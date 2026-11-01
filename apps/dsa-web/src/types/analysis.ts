@@ -42,6 +42,11 @@ export interface MarketReviewAccepted {
   taskId?: string;
 }
 
+export interface MarketReviewDefaultRegion {
+  defaultRegion: string;
+  regions: string[];
+}
+
 // ============ Report Types ============
 
 export type ReportLanguage = 'zh' | 'zh-TW' | 'en' | 'ko';
@@ -323,6 +328,51 @@ export interface MarketReviewBreadth {
   limitDownCount?: number;
   totalAmount?: number;
   turnoverUnit?: string;
+  /** 三大法人買賣超（僅台股），單位與成交額相同；任一格缺值時後端整組不給。 */
+  institutionalNet?: {
+    foreignNet?: number;
+    trustNet?: number;
+    dealerNet?: number;
+    totalNet?: number;
+  };
+}
+
+export type MarketLightStatus = 'green' | 'yellow' | 'red' | 'unavailable';
+
+export interface MarketReviewLight {
+  region?: string;
+  tradeDate?: string;
+  status?: MarketLightStatus | string;
+  score?: number;
+  label?: string;
+  temperatureLabel?: string;
+  reasons?: string[];
+  guidance?: string;
+  dimensions?: Partial<Record<'breadth' | 'index' | 'limit', { score?: number; available?: boolean }>>;
+}
+
+export interface MarketReviewIndexTrend {
+  asOf?: string;
+  series?: Array<{ date: string; close: number }>;
+  ma20?: number | null;
+  ma60?: number | null;
+  distanceMa20Pct?: number | null;
+  distanceMa60Pct?: number | null;
+}
+
+export interface MarketReviewSectorRank {
+  sessionDate?: string;
+  source?: string;
+  basis?: string;
+  items?: Array<{ name: string; changePct: number; turnover?: number; stockCount?: number }>;
+}
+
+export interface MarketReviewNextDayPlan {
+  stance?: 'offensive' | 'balanced' | 'defensive' | null;
+  summary?: string | null;
+  focus?: string[];
+  risks?: string[];
+  keyLevels?: Array<{ label: string; price: number }>;
 }
 
 export interface MarketReviewPayload {
@@ -335,7 +385,11 @@ export interface MarketReviewPayload {
   generatedAt?: string;
   date?: string;
   marketScope?: string;
-  marketLight?: Record<string, unknown>;
+  marketLight?: MarketReviewLight;
+  /** 鍵是指數代號，但經 toCamelCase 後大小寫已變（TAIEX → taiex），查表要先正規化。 */
+  indexTrends?: Record<string, MarketReviewIndexTrend>;
+  sectorRank?: MarketReviewSectorRank;
+  nextDayPlan?: MarketReviewNextDayPlan;
   breadth?: MarketReviewBreadth;
   indices?: MarketReviewIndex[];
   sectors?: SectorRankings;
@@ -698,6 +752,10 @@ export interface StockBarItem {
   modelUsed?: string;
   marketPhaseSummary?: MarketPhaseSummary | null;
   assetType?: 'stock' | 'index';
+  /** 分析當時的價格，不是現價；現價一律走批次行情。 */
+  analysisPrice?: number | null;
+  /** 分析當時的漲跌幅(%)。 */
+  changePct?: number | null;
 }
 
 export interface StockBarResponse {

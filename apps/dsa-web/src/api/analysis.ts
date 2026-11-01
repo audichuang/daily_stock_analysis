@@ -7,6 +7,7 @@ import type {
   AnalyzeAsyncResponse,
   AnalysisReport,
   MarketReviewAccepted,
+  MarketReviewDefaultRegion,
   MarketReviewRequest,
   TaskStatus,
   TaskListResponse,
@@ -100,6 +101,12 @@ export const analysisApi = {
   /**
    * Trigger market review in background mode.
    */
+  /** 不帶 region 觸發複盤時，伺服器實際會跑的市場。 */
+  getMarketReviewDefaultRegion: async (): Promise<MarketReviewDefaultRegion> => {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/analysis/market-review/default-region');
+    return toCamelCase<MarketReviewDefaultRegion>(response.data);
+  },
+
   triggerMarketReview: async (data: MarketReviewRequest = {}): Promise<MarketReviewAccepted> => {
     const response = await apiClient.post<Record<string, unknown>>(
       '/api/v1/analysis/market-review',

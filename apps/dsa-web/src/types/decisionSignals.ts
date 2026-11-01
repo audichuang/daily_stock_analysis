@@ -18,6 +18,26 @@ export type DecisionSignalFeedbackSource = 'web' | 'api';
 export type DecisionProfile = 'conservative' | 'balanced' | 'aggressive';
 export type DecisionProfileDisplay = DecisionProfile | 'unknown';
 
+export interface DecisionSignalSummary {
+  total: number;
+  heldCount: number;
+  actions: Record<string, number>;
+  stopTriggeredCount: number;
+  stopTriggered: Array<{
+    id: number;
+    stockCode: string;
+    stockName?: string | null;
+    market: string;
+    action: string;
+    stopLoss: number;
+    lastClose: number;
+    lastCloseDate: string;
+    isHeld: boolean;
+  }>;
+  /** 有停損價但查不到收盤、無法判定的檔數。 */
+  stopPriceUnavailableCount: number;
+}
+
 export interface DecisionSignalItem {
   id: number;
   stockCode: string;

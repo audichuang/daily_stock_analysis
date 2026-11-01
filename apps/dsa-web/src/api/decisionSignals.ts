@@ -22,6 +22,7 @@ import type {
   DecisionSignalReassessBlockedError,
   DecisionSignalReassessResponse,
   DecisionSignalStatusUpdateRequest,
+  DecisionSignalSummary,
 } from '../types/decisionSignals';
 
 function omitUndefined(input: Record<string, unknown>): Record<string, unknown> {
@@ -327,6 +328,13 @@ export const decisionSignalsApi = {
       params: toListParams(params),
     });
     return toDecisionSignalListResponse(response.data);
+  },
+
+  async getSummary(params: { market?: string; holdingOnly?: boolean } = {}): Promise<DecisionSignalSummary> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/decision-signals/summary', {
+      params: omitUndefined({ market: params.market, holding_only: params.holdingOnly }),
+    });
+    return toCamelCase<DecisionSignalSummary>(response.data);
   },
 
   async get(signalId: number): Promise<DecisionSignalItem> {
