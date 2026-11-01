@@ -9,6 +9,7 @@ import { cn } from '../../utils/cn';
 import { ThemeToggle } from '../theme/ThemeToggle';
 import { UiLanguageToggle } from '../i18n/UiLanguageToggle';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
+import { useEmbedMode } from '../../utils/embedMode';
 
 type ShellProps = {
   children?: React.ReactNode;
@@ -18,6 +19,7 @@ export const Shell: React.FC<ShellProps> = ({ children }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const collapsed = false;
   const { t } = useUiLanguage();
+  const embedded = useEmbedMode();
 
   useEffect(() => {
     if (!mobileOpen) {
@@ -35,6 +37,19 @@ export const Shell: React.FC<ShellProps> = ({ children }) => {
       window.removeEventListener('resize', handleResize);
     };
   }, [mobileOpen]);
+
+  if (embedded) {
+    // iOS 工具頁內嵌：外框由原生 App 提供，這裡只留頁面內容。
+    return (
+      <div className="min-h-screen bg-background text-foreground">
+        <div className="mx-auto flex min-h-screen w-full max-w-[1680px] px-3 py-3 sm:px-4 sm:py-4 lg:px-5">
+          <main className="min-h-0 min-w-0 flex-1 touch-pan-y">
+            {children ?? <Outlet />}
+          </main>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background text-foreground">

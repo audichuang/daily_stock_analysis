@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 回測列表分開「未到期」與「資料不足」，支援 `status`、`market`、`advice`、`sort`，預設已完成優先；新增 `GET /api/v1/backtest/series`，提供逐筆累計報酬（非資金曲線）與月勝率。
 - [新功能] 資料中心回傳實際資料日、預期場次與是否跟上，停用時附原因代碼並標示備援；舊 `status` 不變。
 - [新功能] 用量 API 追加每日彙總、前期比較、估算費用（單價設於 `LLM_USAGE_PRICES`，未設顯示空值，本機 CLI 標示訂閱不計費）、快取命中率與管道，呼叫列表支援 `offset`、`call_type`、`sort`。
+- [改進] Web 支援 `?embed=ios` 內嵌模式：隱藏導覽與外框，旗標存在 sessionStorage，站內換頁不會遺失；判斷集中在 `utils/embedMode.ts`，不帶參數時畫面不變。
+- [改進] iOS 工具頁收斂外框：以 `?embed=ios` 載入，移除說明橫條、隱藏底部分頁、改用細進度條；載入失敗整頁顯示繁中錯誤且不留 WebView，匯出失敗用提示框不影響頁面；登出或更換連線時清掉工具頁的 cookie。
 - [改進] iOS 今日頁新增近期事件總覽，行事曆從工具頁移到這裡；工具頁只留警報與連線捷徑、常用四項，其餘收進「進階」，移除與原生畫面重複的完整分析入口。
 - [新功能] 新增 `AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE`（預設關閉）：API 程序以獨立執行緒只跑警報監控，不需開 `SCHEDULE_ENABLED`、不跑每日分析；即時價規則只在開盤時段評估且報價須屬於今天這一場（確認不了就不通知、不進冷卻；報價不帶時間時，將要觸發才另查最後一筆成交，並用該筆價格重新評估與通知），排程器同時開啟時不重複註冊。
 - [新功能] 新增 `GET /api/v1/alerts/monitor/status` 回報監控實際狀態、上次執行與通知管道；資料中心的 `alert.monitor` 同步認得獨立執行緒。

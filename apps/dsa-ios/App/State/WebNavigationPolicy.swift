@@ -9,6 +9,28 @@ enum WebNavigationPolicy {
         return blockedAccessRedirect && failure.domain == "WebKitErrorDomain" && failure.code == 102
     }
 
+    /// 工具頁一律帶 embed=ios，Web 端據此收掉自己的標頭、側欄與底部分頁。
+    static func embeddedToolURL(path: String, baseURL: URL) -> URL? {
+        guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        var items = components.queryItems ?? []
+        if !items.contains(where: { $0.name == "embed" }) { items.append(URLQueryItem(name: "embed", value: "ios")) }
+        components.queryItems = items
+        return components.url
+    }
+
+    /// `.download` 決策後主頁框的載入可能以 102 中斷；那不是載入失敗，整頁錯誤會把進行中的下載一起收掉。
+    static func isDownloadInterruption(_ error: Error, downloadStarting: Bool) -> Bool {
+        let failure = error as NSError
+        return downloadStarting && failure.domain == "WebKitErrorDomain" && failure.code == 102
+    }
+
+    static func pageLoadMessage(for error: Error) -> String {
+        (error as NSError).domain == NSURLErrorDomain
+            ? "無法連線到分析服務，請確認網路後重試。"
+            : "工具頁載入失敗，請重試。"
+    }
+
     static func sourceOrigin(protocolValue: String, host: String, port: Int) -> URL? {
         guard ["http", "https"].contains(protocolValue.lowercased()), !host.isEmpty else { return nil }
         var source = URLComponents()

@@ -1,8 +1,49 @@
 import XCTest
+import WebKit
 @testable import DSAMarket
 
 final class WebNavigationPolicyTests: XCTestCase {
     private let server = URL(string: "https://market.example.test")!
+
+    func testEmbeddedToolURLAppendsParameterAndKeepsExistingQuery() throws {
+        XCTAssertEqual(WebNavigationPolicy.embeddedToolURL(path: "/alerts", baseURL: server)?.absoluteString,
+                       "https://market.example.test/alerts?embed=ios")
+        XCTAssertEqual(WebNavigationPolicy.embeddedToolURL(path: "/api/v1/stocks/2330.TW/dossier?theme=dark", baseURL: server)?.absoluteString,
+                       "https://market.example.test/api/v1/stocks/2330.TW/dossier?theme=dark&embed=ios")
+        XCTAssertEqual(WebNavigationPolicy.embeddedToolURL(path: "/alerts?embed=ios", baseURL: server)?.absoluteString,
+                       "https://market.example.test/alerts?embed=ios")
+    }
+
+    func testEmbedParameterDoesNotChangeNavigationPolicy() throws {
+        let embedded = try XCTUnwrap(WebNavigationPolicy.embeddedToolURL(path: "/alerts", baseURL: server))
+        XCTAssertTrue(WebNavigationPolicy.sameOrigin(embedded, server))
+        XCTAssertEqual(WebNavigationPolicy.action(url: embedded, baseURL: server, sourceOrigin: server,
+                                                  shouldDownload: false, userLink: false), .allow)
+        let foreign = try XCTUnwrap(WebNavigationPolicy.embeddedToolURL(path: "https://foreign.example.test/alerts", baseURL: server))
+        XCTAssertFalse(WebNavigationPolicy.sameOrigin(foreign, server))
+    }
+
+    func testDownloadInterruptionIsIgnoredOnlyWhileADownloadIsStarting() {
+        let interrupted = NSError(domain: "WebKitErrorDomain", code: 102)
+        XCTAssertTrue(WebNavigationPolicy.isDownloadInterruption(interrupted, downloadStarting: true))
+        XCTAssertFalse(WebNavigationPolicy.isDownloadInterruption(interrupted, downloadStarting: false))
+        XCTAssertFalse(WebNavigationPolicy.isDownloadInterruption(
+            NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet), downloadStarting: true))
+    }
+
+    func testPageLoadMessageIsTraditionalChineseAndSeparatesNetworkFailures() {
+        XCTAssertEqual(WebNavigationPolicy.pageLoadMessage(for: NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)),
+                       "無法連線到分析服務，請確認網路後重試。")
+        XCTAssertEqual(WebNavigationPolicy.pageLoadMessage(for: NSError(domain: "WebKitErrorDomain", code: 102)),
+                       "工具頁載入失敗，請重試。")
+    }
+
+    @MainActor func testLogoutDiscardsToolWebData() async {
+        let store = AppStore()
+        let previous = store.toolWebDataStore
+        await store.logout()
+        XCTAssertFalse(store.toolWebDataStore === previous, "登出後新的工具頁不能沿用舊的 cookie")
+    }
 
     func testAccessPolicyCancellationPreservesSpecificErrorWithoutHidingRealFailures() {
         let interrupted = NSError(domain: "WebKitErrorDomain", code: 102)

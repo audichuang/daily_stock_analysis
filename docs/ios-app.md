@@ -10,7 +10,7 @@ Daily Stock AI 是本專案的原生 iOS 客戶端，支援台股與美股。核
 | 自選／個股 | 同步名單、名稱／代碼搜尋、價格走勢頂端是「分時｜日 K｜週 K｜月 K」分頁、區間下拉（1M～5Y、全部，捲動縮放後選單只是回到該寬度）與「⋯」（K 線／收盤線、看懂 K 線）；K 線可捲動與縮放，主圖 MA／EMA／布林、副圖 MACD／KD／RSI、重點標記；長按拖曳讀值 |
 | AI 研究 | 原生報告、歷史分頁、已載入資料搜尋、策略價位、證據、失效條件、完整報告與分享 |
 | 資產 | 原生現金／市值／損益、分帳戶持股、幣別與報價品質 |
-| 工具 | 2×2 捷徑帶狀態值（價格警報的監控狀態與規則數讀 `GET /api/v1/alerts/monitor/status`、事件行事曆、完整分析、連線）；其餘內嵌既有問股、選股、決策訊號、帳本、基金、回測、資料中心、用量與設定；警報頁仍是內嵌 Web，沒有原生警報 |
+| 工具 | 2×2 捷徑帶狀態值（價格警報的監控狀態與規則數讀 `GET /api/v1/alerts/monitor/status`、事件行事曆、完整分析、連線）；其餘內嵌既有問股、選股、決策訊號、帳本、基金、回測、資料中心、用量與設定；警報頁仍是內嵌 Web，沒有原生警報。內嵌頁以 `?embed=ios` 載入，隱藏 Web 外框與 App 底部分頁，載入中只有細進度條，載入失敗整頁顯示錯誤且不留 WebView |
 
 前四項為 SwiftUI／Swift Charts 原生介面。工具使用受認證保護的既有 Web 介面；台股個股頁另開四維度 HTML 檔案。功能是否可執行仍取決於後端設定與資料源。此版沒有券商下單、iOS 推播或行情背景常駐訂閱。
 
@@ -32,7 +32,7 @@ Client ID／Secret 使用獨立 Keychain service，以小寫 scheme／host／有
 
 原生 HTTP 僅由 `AppStore` 建立獨立 `.ephemeral` URLSession；`DSAClient.responseData` 集中附加 `CF-Access-Client-Id`／`CF-Access-Client-Secret`，每次依 scheme／host／port 核對。跨 origin 轉址全部拒絕，同源轉址重新附加 Header。只有 3xx 且 Location 的 HTTPS host 為 `cloudflareaccess.com` 或其子網域才判為 Access 驗證失敗，一般 403／網路錯誤不誤判。
 
-`.ephemeral` 的私有 `httpCookieStorage` 仍會接收 `Set-Cookie`，只在記憶體保存（[Apple 文件](https://developer.apple.com/documentation/foundation/urlsessionconfiguration/httpcookiestorage)）。工具頁開啟前若缺 `CF_Authorization`，先用原生 `authStatus` 取得；有設定 Token 卻沒有 cookie 時顯示設定錯誤。隨後將 `dsa_session` 與 `CF_Authorization` 注入非持久 WKWebView，再載入頁面；子資源使用 cookie，網頁不接收 Service Token Header。WebKit 導往 Access 登入網域時停止並顯示相同的明確錯誤。取消轉址後收到的 `WebKitErrorDomain` 102 不覆蓋已辨識的 Access 訊息；未擋下 Access 的頁框中斷及一般網路錯誤仍照常顯示。
+`.ephemeral` 的私有 `httpCookieStorage` 仍會接收 `Set-Cookie`，只在記憶體保存（[Apple 文件](https://developer.apple.com/documentation/foundation/urlsessionconfiguration/httpcookiestorage)）。工具頁開啟前若缺 `CF_Authorization`，先用原生 `authStatus` 取得；有設定 Token 卻沒有 cookie 時顯示設定錯誤。隨後將 `dsa_session` 與 `CF_Authorization` 注入 `AppStore` 持有的單一記憶體 data store（登出、換伺服器或更換 Access Token 時整個丟棄），再載入頁面；子資源使用 cookie，網頁不接收 Service Token Header。WebKit 導往 Access 登入網域時停止並顯示相同的明確錯誤。取消轉址後收到的 `WebKitErrorDomain` 102 不覆蓋已辨識的 Access 訊息；未擋下 Access 的頁框中斷及一般網路錯誤仍照常顯示。
 
 實際自動登入路徑：`DSAMarketApp.task` → `AppStore.connect()` → 依儲存網址 origin 讀 Access Keychain → 建立 ephemeral session／DSAClient → `SessionVault.restore` 還原 DSA cookie → 原生 `authStatus`（帶 Access Header，同時取得新的 Access cookie）→ DSA session 有效則直接首頁與 refresh。啟動期間顯示連線進度，不要求操作連線頁。後端 401，或 `authStatus` 明確表示尚未登入，才顯示管理員密碼欄位；App 沿用 cookie 的伺服器到期日，不延長後端 session。本次未修改後端 session 年限。
 
