@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修復] `cli adjust` 重建時官方來源抓到未來 90 天，不再刪掉已公告的未來事件（下次 `daily` 才補回）。
 - [修復] `cli adjust --start` 區間重建：事件日無成交、復牌跨越起點時不再多推一筆因子；dry-run 改用全市場交易日計算，並列出推導列與官方事件的重複。
 - [修復] 股票索引的 8908 欣雄改為 `.TW`（2026-10-16 轉上市）。
+- [改進] 新聞抓取依實測調整：`earnings` 有財報日時錨定 `[財報日−1, 財報日+7]`、否則 30 天（原 180 天）；`latest_news`、`risk_check` 改最近 3 個交易日並優先事件後文章；`market_analysis` 改近 7 天分析師新聞查詢。
+- [改進] 情報報告不再把摘要截成 150 字；Tavily 摘要上限 500 改 1500 並清掉導覽列。情報段落實測由約 5 千字增為 2～3 萬字（有事件時）。
+- [改進] 台股 `earnings`、`risk_check`、`announcements` 不走 Tavily news，優先 DeepSeek；一般個股公告直連公開資訊觀測站 `ajax_t05st01`，失敗改試下一來源。
+- [新功能] 財報後 7 天內或重大波動（沿用 `EVENT_GAP_THRESHOLD_PCT`，不受 `EVENT_GAP_DECISION_ENABLED` 影響）時，加查「為何變動」並以 Tavily Extract 取前 3 篇全文，失敗退回摘要；僅傳統分析路徑，agent 路徑尚未帶事件訊號。
+- [改進] DeepSeek 結果後處理：美股濾中日韓文標題、台股濾 CMoney 論壇與爆料，濾除數記 log；美股 `latest_news` 主要來源回空時才打 `yf.Search`。
 - [改進] 新聞品質：台股查詢改用繁中與公開資訊觀測站（原本帶簡體與上交所、cninfo）；財報面向走新聞模式；事件面向濾掉無日期的資料頁與影片。
 - [改進] iOS 新增 `DSARadius`／`DSASpacing`／`DSAType` 與 `ActionTone`，動作依結構化枚舉顯示詞彙表用語（舊報告「減倉」顯示「減碼」）並改用主色、灰、琥珀；統一 U+2212 負號，新增 `DisplayFormat.price`、`moneyWhole`，移除英文眉標，捲動頁加底部內距避免分頁列蓋住最後一列。
 - [改進] Web 新增 `Segmented`、`FilterBar`（取代 Toolbar，手機次要條件進 Drawer 並顯示已套用數）與 `statusLabels` 狀態碼對照（未知碼中性灰）；`Input`、`Select`、`Button` md 統一 36px。

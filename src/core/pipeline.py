@@ -476,6 +476,7 @@ class StockAnalysisPipeline:
                 news_max_age_days=self.config.news_max_age_days,
                 news_strategy_profile=getattr(self.config, "news_strategy_profile", "short"),
                 finmind_tokens=getattr(self.config, "finmind_tokens", None),
+                public_news_sources_enabled=True,
             )
         except Exception as exc:
             logger.warning("搜索服务初始化失败，将以无搜索模式运行: %s", exc, exc_info=True)
@@ -819,6 +820,7 @@ class StockAnalysisPipeline:
             # Step 3: 趋势分析（基于交易理念）— 在 Agent 分支之前执行，供两条路径共用
             trend_result: Optional[TrendAnalysisResult] = None
             event_gap_daily_bars = None
+            news_signal_daily_bars = None
             try:
                 from src.services.history_loader import get_frozen_target_date
                 _mkt = get_market_for_stock(normalize_stock_code(code))
@@ -828,6 +830,10 @@ class StockAnalysisPipeline:
                 historical_bars = self.db.get_data_range(code, start_date, end_date)
                 if historical_bars:
                     df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
+                    # 新聞檢索不看決策開關，與 event_gap_daily_bars 分開。
+                    news_signal_daily_bars = df.tail(
+                        getattr(self.config, "event_gap_lookback_sessions", 5) + 1
+                    ).to_dict(orient="records")
                     if getattr(self.config, "event_gap_decision_enabled", False) is True:
                         lookback = getattr(self.config, "event_gap_lookback_sessions", 5)
                         event_gap_daily_bars = df.tail(lookback + 1).to_dict(orient="records")
@@ -869,6 +875,17 @@ class StockAnalysisPipeline:
             news_result_count: Optional[int] = None
             self._emit_progress(46, f"{stock_name}：正在检索新闻与舆情")
             if self.search_service is not None and self.search_service.is_available_for_stock(code):
+                news_signals = {}
+                if not is_index:
+                    from src.services.news_event_signals import resolve_news_event_signals
+                    news_signals = resolve_news_event_signals(
+                        code,
+                        get_market_now(get_market_for_stock(normalize_stock_code(code))).date(),
+                        config=self.config,
+                        fundamental_context=fundamental_context,
+                        daily_bars=news_signal_daily_bars,
+                        realtime_quote=realtime_quote,
+                    )
                 logger.info(f"{stock_name}({code}) 开始多维度情报搜索...")
 
                 # 检索已发起：此后即使一条都没拿到，也是「执行了但零命中」而非
@@ -882,7 +899,8 @@ class StockAnalysisPipeline:
                 intel_results = self.search_service.search_comprehensive_intel(
                     stock_code=("" if is_index else code),
                     stock_name=stock_name,
-                    max_searches=5
+                    max_searches=5,
+                    **news_signals,
                 )
 
                 # 格式化情报报告

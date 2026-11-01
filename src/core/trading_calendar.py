@@ -227,6 +227,17 @@ def get_trading_dates(market: str, start_date: date, end_date: date) -> Optional
         return None
 
 
+def recent_sessions_start(market: str, today: date, sessions: int) -> Optional[date]:
+    """最近 N 個交易日（含今天，若今天開市）的第一天；日曆不可用回 None，由呼叫端退回日曆天。"""
+    if sessions < 1:
+        return None
+    # 每個交易日回看 5 個日曆天，足以跨過春節等長假。
+    dates = get_trading_dates(market, today - timedelta(days=max(14, sessions * 5)), today)
+    if dates is None or len(dates) < sessions:
+        return None
+    return dates[-sessions].date()
+
+
 def get_next_trading_date(market: str, check_date: date) -> Optional[date]:
     """
     Return the first trading session strictly after ``check_date``.

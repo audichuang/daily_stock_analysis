@@ -53,6 +53,11 @@ def _post_event_facts(ordered, index):
 def event_gap_context(code, context, config):
     if getattr(config, "event_gap_decision_enabled", False) is not True:
         return None
+    return detect_event_gap(code, context, config)
+
+
+def detect_event_gap(code, context, config):
+    """純偵測，不看決策開關：新聞檢索與結論護欄共用同一套門檻與回看場次。"""
     if not (is_us_stock_code(code) or get_suffix_market(code) == "tw"):
         return None
     threshold = getattr(config, "event_gap_threshold_pct", 12.0)

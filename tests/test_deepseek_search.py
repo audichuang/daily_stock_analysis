@@ -203,7 +203,7 @@ def test_round_robin_is_preserved_with_finmind_only_for_latest(monkeypatch, code
         monkeypatch.setattr(provider, "search", Mock(side_effect=lambda *a, provider=provider, **kw: _ok(provider.name, code, name)))
     with patch("src.search_service.time.sleep"):
         result = service.search_comprehensive_intel(code, name, max_searches=5)
-    assert [r.provider for r in result.values()] == (["FinMind", "Tavily", "DeepSeek", "Tavily", "DeepSeek"] if code.endswith("TW") else ["DeepSeek", "Tavily", "DeepSeek", "Tavily", "DeepSeek"])
+    assert [r.provider for r in result.values()] == (["FinMind", "DeepSeek", "DeepSeek", "DeepSeek", "DeepSeek"] if code.endswith("TW") else ["DeepSeek", "Tavily", "DeepSeek", "Tavily", "DeepSeek"])
     assert service._finmind_provider.search.call_count == (1 if code.endswith("TW") else 0)
 
 

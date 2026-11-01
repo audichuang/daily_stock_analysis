@@ -663,6 +663,26 @@ class PipelineSearchSemanticsTestCase(unittest.TestCase):
         call_kwargs = pipeline.search_service.search_comprehensive_intel.call_args.kwargs
         self.assertEqual(call_kwargs["stock_code"], "600519")
 
+    def test_news_event_signals_reach_search(self) -> None:
+        pipeline = _analysis_pipeline("600519", "贵州茅台", enable_search=True)
+        signals = {"earnings_date": "sentinel-day", "price_event": {"event_date": "sentinel"}}
+
+        with patch("src.services.news_event_signals.resolve_news_event_signals", return_value=signals):
+            pipeline.analyze_stock("600519", MagicMock(), "q1")
+
+        call_kwargs = pipeline.search_service.search_comprehensive_intel.call_args.kwargs
+        self.assertEqual(call_kwargs["earnings_date"], "sentinel-day")
+        self.assertEqual(call_kwargs["price_event"], {"event_date": "sentinel"})
+
+    def test_news_event_signals_skipped_for_index(self) -> None:
+        pipeline = _analysis_pipeline("sh000016", "上证50", enable_search=True)
+
+        with patch("src.services.news_event_signals.resolve_news_event_signals") as resolve:
+            pipeline.analyze_stock("sh000016", MagicMock(), "q1", analysis_target=_index_target("sh000016"))
+
+        resolve.assert_not_called()
+        self.assertNotIn("earnings_date", pipeline.search_service.search_comprehensive_intel.call_args.kwargs)
+
     def test_v7_provider_queries_contain_only_chinese_index_name(self) -> None:
         service = SearchService(
             searxng_public_instances_enabled=False,
