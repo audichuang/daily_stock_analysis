@@ -41,13 +41,13 @@ description: 按 issue 分析结论实现修复，并补齐验证、风险与回
 
 ### Step 4: 按改动面验证
 
-按 `AGENTS.md` 的验证矩阵执行最接近的检查：
+按 `AGENTS.md` §6 与该目录的 `AGENTS.md`执行最接近的检查：
 
 - 后端快速门槛：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`（秒级，开发中默认用这个；本机必须带 `uv run`，否则 `python: command not found`）
-- 后端完整门槛：`uv run ./scripts/ci_gate.sh`（= `all`，含全量离线测试；仅在交付前跑，耗时与判定基准见 `tests/AGENTS.md`）
+- 后端完整门槛：`uv run ./scripts/ci_gate.sh`（= `all`，含全量离线测试；仅在交付前跑，耗时与判定基准见 `docs/test-triage.md`）
 - 最低后端要求：`uv run python -m py_compile <changed_python_files>`
 - 前端：`cd apps/dsa-web && npm ci && npm run lint && npm run build`
-- iOS（`apps/dsa-ios/`）：CI 不覆盖，按根 `AGENTS.md` §6 在本机跑 Core 单测与 `test-ui.sh`
+- iOS（`apps/dsa-ios/`）：CI 不覆盖，按 `apps/dsa-ios/AGENTS.md` 在本机跑 Core 单测与 `test-ui.sh`
 
 如无法完成完整验证，必须记录缺口、原因与潜在风险。
 

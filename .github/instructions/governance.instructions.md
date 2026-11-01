@@ -4,4 +4,4 @@ applyTo: "README.md,docs/**,AGENTS.md,CLAUDE.md,.github/**,.claude/skills/**,scr
 
 # Governance Instructions
 
-規則見根目錄 `AGENTS.md`（§2 治理資產）與 `scripts/AGENTS.md`、`.github/workflows/AGENTS.md`。
+規則見根目錄 `AGENTS.md`（§2 治理資產）與 `docs/AGENTS.md`、`scripts/AGENTS.md`、`.github/workflows/AGENTS.md`。

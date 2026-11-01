@@ -16,6 +16,7 @@ SwiftUI App（Daily Stock AI），打 repo 根 `api/` 的同一套 `/api/v1`，�
 
 ## 驗證
 
+- **CI 不建置也不測試 iOS**，交付前在 repo 根跑 `swift test --package-path apps/dsa-ios/Core` 與 `bash apps/dsa-ios/scripts/test-ui.sh`（不帶參數時用固定模擬器）。
 - 完整流程與證據規格走 `/verify` skill（`features/ios.md`）。
 - UI 測試跑在合成的 `scripts/fixture-server.py` 上；要重現正式服務的慢回應，用 fixture 的 `--quote-delay`（`scripts/test-ui.sh` 已帶 2 秒）。
 

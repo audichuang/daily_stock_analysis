@@ -7,6 +7,7 @@
 ## 進來改要遵守
 
 - **台股代碼的接受規則要三處一起放寬或收緊**:後端閘門 `v1/endpoints/stocks.py` 的 `_STOCK_CODE_RE`、前端 `apps/dsa-web/src/utils/validation.ts`、聊天抽取 `chatStockCode.ts`;語意真源是 `src/services/market_symbol_utils.py`。三條 regex 本來就不逐字相同(指數別名各有處理),只同步台股那一段,**不要改成一模一樣**。只修一處的症狀是「解析得過但抓不到報價」,比直接拒絕更難診斷。
+- 台股代碼正則的契約測試 `test_tw_code_pattern_contract.py` 只看得到「同一行寫了位數與 `TW`」的正則;`isdigit()`、分開比對後綴的寫法它看不到,查「帶字母的台股不見了」時仍要全掃。
 - **字元判斷只認 ASCII。**Python 的 `\d`、`str.isdigit()`、`str.isalpha()` 都是 Unicode-aware,全形數字、阿拉伯-印度數字、漢字都會通過;而下游抓取失敗是 fail-open,結果是一份靜默缺資料的報告而不是拒絕。regex 帶 `re.ASCII`,字元方法配 `.isascii()` 或字面範圍比較。
 - **錯誤一律用 `v1/errors.py` 的 `api_error()` 帶錯誤碼。**`HTTPException(detail="字串")` 會被包成籠統的 `http_error`,前端靠 `detail.error` 的碼分類(如 `portfolio_busy`、`screening_unavailable`),對不到碼就走不到對應的處理。
 - **校驗失敗的回應只投影 `type`／`loc`／`msg`,刻意丟掉 pydantic 的 `input` 與 `ctx`**(會回顯密碼、把 100KB 輸入原樣吐回、`ctx` 裡的例外物件無法序列化而變 500)。端點自己組的錯誤訊息不經過那層投影,所以**新 schema 的字串欄位一律設 `max_length`**,在輸入邊界擋。
