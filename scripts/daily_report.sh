@@ -363,6 +363,16 @@ event_outlook_outcomes() {
   fi
 }
 
+# 復權的官方分割來源失敗時 daily 不報錯（沿用既有列，下一輪補回），只在 log 留 ADJUST_ALERT 行；
+# market_data daily 的環境沒有 Telegram 憑證，所以由這裡讀本輪 log 推系統通知。
+notify_adjust_alerts() {
+  local lines
+  lines=$(sed -n 's/^ADJUST_ALERT: //p' "$LOG")
+  [[ -z "$lines" ]] && return 0
+  notify_failure "${lines}
+每日報告照常。log: $LOG" "復權官方來源失敗" || true
+}
+
 main() {
   set -uo pipefail
 
@@ -396,6 +406,7 @@ main() {
 
   log "daily report start (log: $LOG)"
   run_step "台股資料更新 (market_data daily)" uv run --env-file .env python -m market_data.cli daily
+  notify_adjust_alerts
   run_step "台股資料健檢 (health --strict)" uv run --env-file .env python -m market_data.cli health --strict
   log "==> 盤前判讀回驗 (verify_morning_calls --append)"
   morning_call_outcomes

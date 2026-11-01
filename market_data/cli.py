@@ -78,6 +78,10 @@ def main(argv=None):
     adj.add_argument("--no-reductions", action="store_true",
                      help="跳過兩個需要網路的官方來源(TWTAUU 減資 + TPEx 上櫃除權息),"
                           "改為沿用 DB 既有的那些列;離線重算價格推導部分時用,不會清空官方值")
+    adj.add_argument("--dry-run", action="store_true",
+                     help="只印新增/修改/刪除/不變清單與修正前後還原報酬;連線強制唯讀,不寫 DB")
+    adj.add_argument("--show-unchanged", action="store_true",
+                     help="搭配 --dry-run:逐列印出不變的列(預設只印各來源筆數)")
     f = sub.add_parser("financials", help="財報季更(下載 IFRS html → financial_statement)")
     f.add_argument("--year", type=int, required=True, help="會計年度,如 2026")
     f.add_argument("--season", type=int, required=True, choices=[1, 2, 3, 4])
@@ -101,7 +105,7 @@ def main(argv=None):
                          "(用 scripts/measure_signal_forward.py --emit-revenue-gaps 產生)")
     args = p.parse_args(argv)
 
-    eng = get_engine()
+    eng = get_engine(read_only=True) if args.command == "adjust" and args.dry_run else get_engine()
     if args.command == "daily":
         crawl.daily_update(eng)
     elif args.command == "health":
@@ -148,6 +152,11 @@ def main(argv=None):
             print(f"fund_nav {fid} {n:,} new rows")
     elif args.command == "adjust":
         from market_data import adjust
+        if args.dry_run:
+            adjust.print_dry_run(
+                adjust.dry_run(eng, start=args.start, with_reductions=not args.no_reductions),
+                show_unchanged=args.show_unchanged)
+            return
         res = adjust.rebuild(eng, start=args.start, with_reductions=not args.no_reductions)
         print(f"price_adjustment rows upserted: {res.pop('written'):,}")
         print(f"  by source: {res.pop('by_kind', {})}")

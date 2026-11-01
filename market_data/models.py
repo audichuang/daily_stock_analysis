@@ -159,7 +159,7 @@ class PriceAdjustment(Base):
     ``factor`` = reference_price / close_before(<1 為除息/分割,>1 為減資)。
     前復權時把 ``date`` **之前**的價格乘上 factor,最新價維持原值。
 
-    ``source`` 標明可信度:``twse_twt49u``/``twse_twtauu`` 為官方公告值;``inferred_price``
+    ``source`` 標明可信度:``twse_twt49u``/``twse_twtauu`` 等為官方公告值(完整清單見 ``adjust.py`` 檔頭);``inferred_price``
     是由價格跳空回推——台股有 ±10% 漲跌幅限制(ETF 除外),故非 ETF 的單日 >15% 跳空
     必為公司行動,但回推值含當日自身漲跌(誤差 ≤10%),優先權低於官方值。
     """
@@ -170,7 +170,7 @@ class PriceAdjustment(Base):
     date: Mapped[_date] = mapped_column(Date, primary_key=True)  # 事件生效日(除權息日/恢復買賣日)
     factor: Mapped[float] = mapped_column(Numeric(18, 10), nullable=False)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)  # dividend|split|reduction|inferred
-    source: Mapped[str] = mapped_column(String(24), nullable=False)  # twse_twt49u|twse_twtauu|tpex_revivt|inferred_price
+    source: Mapped[str] = mapped_column(String(24), nullable=False)  # 見 adjust.py 檔頭的來源表
     close_before: Mapped[float | None] = mapped_column(Numeric(12, 4))
     reference_price: Mapped[float | None] = mapped_column(Numeric(12, 4))
 
