@@ -181,6 +181,11 @@ public struct ResearchThesis: Codable, Sendable {
     public let exitTriggers: [String]?
     public let pendingEvents: [String]?
     public let nextCheckTime: String?
+    // B02: the model's own wording before a guardrail rewrite; nil on old servers.
+    public let modelOneSentence: String?
+    public let modelPositionAdvice: ReportPositionAdvice?
+    /// data_unavailable or market_logic; nil on old servers and unguarded reports.
+    public let guardrailKind: String?
 }
 
 public struct ResearchEvidence: Codable, Sendable, Identifiable {
@@ -537,6 +542,11 @@ public struct ReportSummary: Codable, Sendable {
     public let exitTriggers: [String]?
     public let pendingEvents: [String]?
     public let nextCheckTime: String?
+    // B02: the model's own wording before a guardrail rewrite; nil on old servers.
+    public let modelOneSentence: String?
+    public let modelPositionAdvice: ReportPositionAdvice?
+    /// data_unavailable or market_logic; nil on old servers and unguarded reports.
+    public let guardrailKind: String?
 }
 
 public struct ReportStrategy: Codable, Sendable {
@@ -935,5 +945,89 @@ public struct MarketSessionStatus: Codable, Sendable {
     public init(marketPhase: String? = nil, marketOpen: Bool? = nil) {
         self.marketPhase = marketPhase
         self.marketOpen = marketOpen
+    }
+}
+
+// MARK: - Report screen presentation (I06)
+
+public enum ReportDisplayDate {
+    /// "2026-10-30T18:00:00" → "10/30"; keeps the backend's own date, no timezone conversion.
+    public static func monthDay(_ value: String?) -> String? {
+        MarketReviewCardText.shortDate(value)
+    }
+}
+
+/// How the report screen shows a guardrail rewrite; same rules as the Web report page (W07).
+public struct ReportGuardrailDisplay: Sendable {
+    public enum Tone: Sendable { case muted, warning }
+
+    /// Conclusion headline to show instead of `oneSentence`; nil keeps the report's sentence.
+    public let headline: String?
+    /// One-line disclosure label, e.g.「系統護欄：降為觀望」.
+    public let label: String
+    public let tone: Tone
+    /// Lines revealed when the disclosure is expanded.
+    public let details: [String]
+    /// Position advice to show instead of the guarded one; nil keeps the default advice.
+    public let positionAdvice: ReportPositionAdvice?
+
+    /// `actionText` is the post-guardrail action label; nil when the report has no action.
+    public static func of(_ summary: ReportSummary, actionText: String?) -> ReportGuardrailDisplay? {
+        let kind = trimmed(summary.guardrailKind)
+        guard summary.guardrailApplied == true || kind != nil else { return nil }
+        let action = trimmed(actionText) ?? "觀望"
+        let reason = trimmed(summary.guardrailReason)
+        let modelSentence = trimmed(summary.modelOneSentence)
+        let guardedSentence = trimmed(summary.oneSentence)
+
+        switch kind {
+        case "data_unavailable":
+            let advice = summary.modelPositionAdvice
+            let hasAdvice = trimmed(advice?.hasPosition) != nil || trimmed(advice?.noPosition) != nil
+            return ReportGuardrailDisplay(
+                headline: modelSentence.map { "模型原意：\($0)" },
+                label: "系統護欄：資料缺，動作降為\(action)",
+                tone: .muted,
+                details: [reason, modelSentence == nil ? nil : guardedSentence.map { "護欄版：\($0)" }].compactMap { $0 },
+                positionAdvice: modelSentence != nil && hasAdvice ? advice : nil
+            )
+        case "market_logic":
+            return ReportGuardrailDisplay(
+                headline: nil,
+                label: "系統護欄：降為\(action)",
+                tone: .warning,
+                details: [reason, modelSentence.map { "模型原本建議：\($0)" }].compactMap { $0 },
+                positionAdvice: nil
+            )
+        default:
+            // Old reports carry only guardrail_applied + reason.
+            return ReportGuardrailDisplay(
+                headline: nil,
+                label: "系統護欄：\(action)",
+                tone: .warning,
+                details: [reason ?? "這份結論已套用系統護欄。"],
+                positionAdvice: nil
+            )
+        }
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        guard let text = value?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        return text
+    }
+}
+
+public enum ReportNextSteps {
+    /// Trimmed, non-empty strings in first-seen order; drops anything already in `excluding`.
+    public static func unique(_ groups: [String]?..., excluding: [String] = []) -> [String] {
+        var seen = Set(excluding.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+        var result: [String] = []
+        for group in groups {
+            for item in group ?? [] {
+                let text = item.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty, seen.insert(text).inserted { result.append(text) }
+            }
+        }
+        return result
     }
 }

@@ -15,6 +15,11 @@ struct PortfolioView: View {
     @State private var collapsedAccounts: Set<Int> = []
     @State private var expandedHoldings: Set<String> = []
     @State private var route: Route?
+    /// Server the local state belongs to; per-server UI state is only cleared when it actually changes.
+    @State private var loadedBaseURL: URL?
+
+    /// The Today tab refreshes the same snapshot; within this window the store copy is fresh enough.
+    private static let storeFreshness: TimeInterval = 60
 
     private static let allMarkets = "all"
 
@@ -22,11 +27,13 @@ struct PortfolioView: View {
         case accounts, merged
         var id: String { rawValue }
         var title: String { self == .accounts ? "依帳戶" : "合併持股" }
+        var shortTitle: String { self == .accounts ? "依帳戶" : "合併" }
     }
 
     private enum Route: Hashable {
         case stock(String)
         case ledger
+        case ledgerEntry(entry: String, title: String)
     }
 
     var body: some View {
@@ -35,14 +42,14 @@ struct PortfolioView: View {
                 ErrorStateView(title: snapshot == nil ? "資產載入失敗" : "更新失敗，顯示上次資料", message: error) {
                     Task { await load() }
                 }
-                .plainRow()
+                .plainRow(.block)
             }
             if let snapshot {
                 content(snapshot)
             } else if loading {
-                LoadingStateView("正在讀取資產與持股…").plainRow()
+                LoadingStateView("正在讀取資產與持股…").plainRow(.block)
             }
-            PageBottomAnchor().plainRow()
+            PageBottomAnchor().plainRow(.content)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -57,24 +64,32 @@ struct PortfolioView: View {
             switch target {
             case let .stock(code): StockDetailView(code: code)
             case .ledger: ToolWebView(path: "/portfolio", title: "帳本管理")
+            case let .ledgerEntry(entry, title): ToolWebView(path: ToolLinks.portfolioPath(entry: entry), title: title)
             }
         }
         .task(id: store.baseURL) {
-            snapshot = nil
-            risk = nil
-            collapsedAccounts = []
-            expandedHoldings = []
+            // Draw the snapshot the Today tab already fetched instead of a loading skeleton.
+            if loadedBaseURL != store.baseURL {
+                loadedBaseURL = store.baseURL
+                snapshot = store.portfolioSummary
+                risk = nil
+                collapsedAccounts = []
+                expandedHoldings = []
+            } else if let cached = store.portfolioSummary {
+                snapshot = cached
+            }
             await load()
         }
-        .refreshable { await load() }
+        .refreshable { await load(force: true) }
     }
 
-    /// Web 的帳本頁沒有深連結，選單的每一項都開同一頁，在那裡完成。
+    /// 每一項帶 entry 開 Web 帳本的對應抽屜；Web 還不認得 entry 時照舊停在 /portfolio。
     private var addMenu: some View {
         Menu {
-            Button("新增交易", systemImage: "arrow.left.arrow.right") { route = .ledger }
-            Button("資金異動", systemImage: "banknote") { route = .ledger }
-            Button("新增帳戶", systemImage: "person.crop.circle.badge.plus") { route = .ledger }
+            Button("新增交易", systemImage: "arrow.left.arrow.right") { route = .ledgerEntry(entry: "trade", title: "新增交易") }
+            Button("資金異動", systemImage: "banknote") { route = .ledgerEntry(entry: "cash", title: "資金異動") }
+            Button("新增帳戶", systemImage: "person.crop.circle.badge.plus") { route = .ledgerEntry(entry: "account", title: "新增帳戶") }
+            Button("匯入對帳單", systemImage: "square.and.arrow.down") { route = .ledgerEntry(entry: "import", title: "匯入對帳單") }
         } label: {
             Image(systemName: "plus")
         }
@@ -85,12 +100,13 @@ struct PortfolioView: View {
     @ViewBuilder
     private func content(_ value: PortfolioSnapshot) -> some View {
         if !value.hasAnyAssets {
-            emptyPortfolio.plainRow()
+            emptyPortfolio.plainRow(.block)
         } else {
-            summary(value).plainRow()
+            summary(value).plainRow(.block)
             let insights = PortfolioInsights.make(snapshot: value, risk: risk)
-            if !insights.isEmpty { insightRow(insights).plainRow() }
-            controls(value).plainRow()
+            if !insights.isEmpty { insightRow(insights).plainRow(.block) }
+            controls(value).plainRow(.control)
+            if !dynamicTypeSize.isAccessibilitySize { columnHeader.plainRow(.columnHeader) }
             let accounts = visibleAccounts(in: value)
             switch mode {
             case .accounts:
@@ -100,7 +116,7 @@ struct PortfolioView: View {
             case .merged:
                 mergedRows(accounts)
             }
-            footer(value, accounts: accounts).plainRow()
+            footer(value, accounts: accounts).plainRow(.block)
         }
     }
 
@@ -136,49 +152,88 @@ struct PortfolioView: View {
                 } else {
                     nativeTotals(value.currencyTotals)
                 }
-                quoteStatus(value)
+                fundAndQuoteLine(value)
             }
         }
     }
 
     @ViewBuilder
     private func overviewContent(_ overview: PortfolioOverview) -> some View {
+        let total = DisplayFormatting.summaryMoney(overview.totalAssets, currency: overview.currency)
         Text("全部資產（\(currencyName(overview.currency))折合）")
             .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-        Text(wholeMoney(overview.totalAssets, currency: overview.currency))
+        Text(total)
             .font(.title.weight(.bold).monospacedDigit())
             .foregroundStyle(Theme.text)
             .minimumScaleFactor(0.75).lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-            .accessibilityLabel("全部資產 \(wholeMoney(overview.totalAssets, currency: overview.currency))")
+            .accessibilityLabel("全部資產 \(total)")
             .accessibilityIdentifier("portfolio.summary.totalEquity")
-        LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
-            compactMetric("今日損益", value: overview.dayPnl, currency: overview.currency, isChange: true)
-            compactMetric("未實現損益", value: overview.unrealizedPnl, currency: overview.currency, isChange: true,
-                          detail: overview.unrealizedPct.map { DisplayFormat.percent($0) })
-            compactMetric("已實現損益", value: overview.realizedPnl, currency: overview.currency, isChange: true)
-            compactMetric("現金", value: overview.cash, currency: overview.currency)
-        }
-        if overview.fxMissing {
-            qualityNotice("缺少換算匯率，折合金額暫不顯示；以下是各幣別原幣合計。")
-        } else if overview.fxStale {
-            qualityNotice("折合使用過期匯率，僅供參考。")
-        }
-        if overview.hasNegativeCash {
-            Button { route = .ledger } label: {
-                qualityNotice("淨現金為負，可能有入金還沒記帳，點這裡補記。")
-                    .frame(minHeight: 44)
-                    .contentShape(Rectangle())
+        overviewMetrics(overview)
+        overviewNotices(overview)
+    }
+
+    /// Four cells, top-aligned so a cell with a percentage does not push its neighbour down.
+    @ViewBuilder
+    private func overviewMetrics(_ overview: PortfolioOverview) -> some View {
+        let day = overviewMetric("今日損益", value: overview.dayPnl, currency: overview.currency, isChange: true)
+        let unrealized = overviewMetric("未實現損益", value: overview.unrealizedPnl, currency: overview.currency, isChange: true,
+                                        detail: overview.unrealizedPct.map { DisplayFormat.percent($0) })
+        let realized = overviewMetric("已實現損益", value: overview.realizedPnl, currency: overview.currency, isChange: true)
+        let cash = overviewMetric("現金", value: overview.cash, currency: overview.currency)
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 10) { day; unrealized; realized; cash }
+        } else {
+            Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 10) {
+                GridRow { day; unrealized }
+                GridRow { realized; cash }
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("portfolio.negativeCash")
         }
-        if let fund = overview.fundValue, fund > 0 {
-            Text("含基金 \(wholeMoney(fund, currency: overview.currency))")
-                .font(.caption2).foregroundStyle(Theme.secondary)
-        } else if !overview.fundsIncluded {
-            Text("基金暫時讀不到，總額只算帳本。")
-                .font(.caption2).foregroundStyle(Theme.warning)
+    }
+
+    @ViewBuilder
+    private func overviewNotices(_ overview: PortfolioOverview) -> some View {
+        let fxText: String? = overview.fxMissing ? "缺少換算匯率，折合金額暫不顯示；以下是各幣別原幣合計。"
+            : overview.fxStale ? "折合使用過期匯率，僅供參考。" : nil
+        if fxText != nil || overview.hasNegativeCash {
+            VStack(alignment: .leading, spacing: 6) {
+                if let fxText { qualityNotice(fxText) }
+                if overview.hasNegativeCash {
+                    Button { route = .ledger } label: {
+                        qualityNotice("淨現金為負，可能有入金還沒記帳，點這裡補記。", showsChevron: true)
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("portfolio.negativeCash")
+                }
+            }
         }
+    }
+
+    /// Fund inclusion and quote freshness share one caption line.
+    private func fundAndQuoteLine(_ value: PortfolioSnapshot) -> some View {
+        let quote = quoteStatus(value)
+        var fund: (text: String, warning: Bool)?
+        if let overview = value.overview {
+            if let amount = overview.fundValue, amount > 0 {
+                fund = ("含基金 \(DisplayFormatting.summaryMoney(amount, currency: overview.currency))", false)
+            } else if !overview.fundsIncluded {
+                fund = ("基金暫時讀不到，總額只算帳本", true)
+            }
+        }
+        let quoteText = Text(quote.text).foregroundStyle(quote.warning ? Theme.warning : Theme.secondary)
+        let line: Text
+        if let fund {
+            let fundText = Text(fund.text).foregroundStyle(fund.warning ? Theme.warning : Theme.secondary)
+            line = Text("\(fundText) · \(quoteText)")
+        } else {
+            line = quoteText
+        }
+        return line
+            .font(.caption2)
+            .foregroundStyle(Theme.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("portfolio.quoteStatus")
     }
 
     private func nativeTotals(_ totals: [PortfolioCurrencyTotal]) -> some View {
@@ -194,7 +249,7 @@ struct PortfolioView: View {
         }
     }
 
-    private func quoteStatus(_ value: PortfolioSnapshot) -> some View {
+    private func quoteStatus(_ value: PortfolioSnapshot) -> (text: String, warning: Bool) {
         var delayed = 0, stale = 0, missing = 0, live = 0
         for position in value.accounts.flatMap(\.positions) {
             switch PresentationText.quoteWarning(available: position.priceAvailable, stale: position.priceStale,
@@ -210,34 +265,38 @@ struct PortfolioView: View {
         if delayed > 0 { parts.append("延遲 \(delayed)") }
         if stale > 0 { parts.append("過期 \(stale)") }
         if missing > 0 { parts.append("無報價 \(missing)") }
-        return Text("報價：" + (parts.isEmpty ? "沒有持股" : parts.joined(separator: " · ")))
-            .font(.caption2)
-            .foregroundStyle(delayed + stale + missing > 0 ? Theme.warning : Theme.secondary)
-            .accessibilityIdentifier("portfolio.quoteStatus")
+        return ("報價：" + (parts.isEmpty ? "沒有持股" : parts.joined(separator: " · ")), delayed + stale + missing > 0)
     }
 
     private func insightRow(_ insights: [PortfolioInsight]) -> some View {
+        // One column per card: with no sector card the remaining two split the width.
         HStack(alignment: .top, spacing: 8) {
             ForEach(insights) { insight in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(insight.title).font(.caption2).foregroundStyle(Theme.secondary)
-                    Text(insight.value)
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(insight.isAlert ? Theme.warning : Theme.text)
-                        .lineLimit(1).minimumScaleFactor(0.75)
-                    Text(insight.detail).font(.caption2).foregroundStyle(Theme.secondary).lineLimit(1)
+                DSACard {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(insight.title).font(.caption2).foregroundStyle(Theme.secondary)
+                        Text(insight.value)
+                            .font(.subheadline.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(insightColor(insight))
+                            .lineLimit(1).minimumScaleFactor(0.75)
+                        Text(insight.detail).font(.caption2).foregroundStyle(Theme.secondary).lineLimit(1)
+                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: DSARadius.card))
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("portfolio.insight.\(insight.id)")
             }
         }
     }
 
+    private func insightColor(_ insight: PortfolioInsight) -> Color {
+        if insight.isAlert { return Theme.warning }
+        if let change = insight.changeValue { return Theme.changeColor(change, convention: store.colorConvention) }
+        return Theme.text
+    }
+
     // MARK: 篩選與排序
 
+    /// Market stays a full-width segmented control; view mode and sort share one menu on the title row.
     private func controls(_ value: PortfolioSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if value.marketKeys.count > 1 {
@@ -250,28 +309,64 @@ struct PortfolioView: View {
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("portfolio.market-picker")
             }
-            HStack(spacing: 12) {
-                Picker("檢視方式", selection: $mode) {
-                    ForEach(ViewMode.allCases) { item in
-                        Text(item.title).tag(item)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("portfolio.view-mode")
+            HStack(spacing: 8) {
+                Text("持股")
+                    .font(.headline).foregroundStyle(Theme.text)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 8)
                 Menu {
-                    Picker("排序", selection: $sort) {
-                        ForEach(PortfolioHoldingSort.allCases) { item in
-                            Text(item.title).tag(item)
+                    Section("檢視方式") {
+                        Picker("檢視方式", selection: $mode) {
+                            ForEach(ViewMode.allCases) { item in
+                                Text(item.title).tag(item)
+                            }
                         }
+                        .pickerStyle(.inline)
+                    }
+                    Section("排序") {
+                        Picker("排序", selection: $sort) {
+                            ForEach(PortfolioHoldingSort.allCases) { item in
+                                Text(item.title).tag(item)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                        .accessibilityIdentifier("portfolio.sort")
                     }
                 } label: {
-                    Label(sort.title, systemImage: "arrow.up.arrow.down")
-                        .font(.caption.weight(.medium))
-                        .frame(minHeight: 44)
+                    HStack(spacing: 4) {
+                        Text("\(mode.shortTitle) · \(sort.title)")
+                        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Theme.accent)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
                 }
-                .accessibilityIdentifier("portfolio.sort")
+                .accessibilityLabel("檢視方式與排序")
+                .accessibilityValue("\(mode.title)，依\(sort.title)排序")
+                .accessibilityIdentifier("portfolio.view-mode")
             }
         }
+    }
+
+    /// Column titles matching `holdingColumns`; hidden in the single-column accessibility layout.
+    private var columnHeader: some View {
+        HStack(spacing: 8) {
+            Text("名稱").frame(maxWidth: .infinity, alignment: .leading)
+            Text("現價／今日").frame(width: 64, alignment: .trailing)
+            Text("市值／佔比").frame(width: 72, alignment: .trailing)
+            Text("損益").frame(width: 72, alignment: .trailing)
+        }
+        .font(.caption2)
+        .foregroundStyle(Theme.secondary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .padding(.bottom, 4)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.border).frame(height: 1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("portfolio.column-header")
     }
 
     // MARK: 帳戶
@@ -286,18 +381,18 @@ struct PortfolioView: View {
             accountHeader(account, missingFX: missingFX, collapsed: isCollapsed)
         }
         .buttonStyle(.plain)
-        .plainRow(top: 10, bottom: 4)
+        .plainRow(.columnHeader)
         .accessibilityValue(isCollapsed ? "已收合" : "已展開")
         .accessibilityIdentifier("portfolio.account.\(account.accountId)")
         if !isCollapsed {
             if missingFX {
-                qualityNotice("帳戶缺少換算匯率，合計暫不顯示。").plainRow(top: 0, bottom: 4)
+                qualityNotice("帳戶缺少換算匯率，合計暫不顯示。").padding(.bottom, 4).plainRow(.content)
             } else if account.fxStale == true {
-                qualityNotice("帳戶使用過期匯率，換算值僅供參考。").plainRow(top: 0, bottom: 4)
+                qualityNotice("帳戶使用過期匯率，換算值僅供參考。").padding(.bottom, 4).plainRow(.content)
             }
             let holdings = PortfolioHoldings.forAccount(account, sort: sort)
             if holdings.isEmpty {
-                Text("目前沒有持股").font(.subheadline).foregroundStyle(Theme.secondary).plainRow(top: 4, bottom: 8)
+                Text("目前沒有持股").font(.subheadline).foregroundStyle(Theme.secondary).plainRow(.block)
             } else {
                 ForEach(holdings) { holding in
                     holdingRow(holding, identifier: "portfolio.position.\(account.accountId).\(holding.symbol)")
@@ -339,7 +434,7 @@ struct PortfolioView: View {
         ForEach(PortfolioHoldings.merged(accounts, sort: sort)) { group in
             Text("\(currencyName(group.currency))持股")
                 .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                .plainRow(top: 10, bottom: 2)
+                .plainRow(.columnHeader)
                 .accessibilityAddTraits(.isHeader)
             ForEach(group.holdings) { holding in
                 holdingRow(holding, identifier: "portfolio.merged.\(holding.symbol)")
@@ -357,7 +452,7 @@ struct PortfolioView: View {
                 .accessibilityIdentifier(identifier)
             if expanded { holdingDetails(holding) }
         }
-        .plainRow(top: 0, bottom: 0, separator: true)
+        .plainRow(.content, separator: true)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(expanded ? "收起" : "明細") {
                 if expanded { expandedHoldings.remove(holding.id) } else { expandedHoldings.insert(holding.id) }
@@ -512,6 +607,26 @@ struct PortfolioView: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// Overview cell: whole-dollar TWD via summaryMoney, the percentage sits on the amount's line.
+    private func overviewMetric(_ label: String, value: Double?, currency: String, isChange: Bool = false, detail: String? = nil) -> some View {
+        let amount = DisplayFormatting.summaryMoney(value, currency: currency)
+        let color = isChange ? Theme.changeColor(value, convention: store.colorConvention) : (value ?? 0) < 0 ? Theme.warning : Theme.text
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption2).foregroundStyle(Theme.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(isChange && (value ?? 0) > 0 ? "+" + amount : amount)
+                    .font(.callout.weight(.semibold).monospacedDigit())
+                if let detail {
+                    Text(detail).font(.caption2.monospacedDigit())
+                }
+            }
+            .foregroundStyle(color)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .accessibilityElement(children: .combine)
+    }
+
     private func compactMetric(_ label: String, text: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.caption2).foregroundStyle(Theme.secondary)
@@ -521,10 +636,20 @@ struct PortfolioView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func qualityNotice(_ text: String) -> some View {
-        Label(text, systemImage: "exclamationmark.triangle")
-            .font(.caption).foregroundStyle(Theme.warning)
-            .fixedSize(horizontal: false, vertical: true)
+    /// Small warning box; a tappable notice adds a trailing chevron.
+    private func qualityNotice(_ text: String, showsChevron: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle").accessibilityHidden(true)
+            Text(text).fixedSize(horizontal: false, vertical: true)
+            if showsChevron {
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).accessibilityHidden(true)
+            }
+        }
+        .font(.caption).foregroundStyle(Theme.warning)
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.warning.opacity(0.08), in: RoundedRectangle(cornerRadius: DSARadius.control, style: .continuous))
     }
 
     private var columns: [GridItem] {
@@ -557,11 +682,6 @@ struct PortfolioView: View {
         return (value < 0 ? "−" : "") + moneyPrefix(currency) + DisplayFormat.number(abs(value))
     }
 
-    private func wholeMoney(_ value: Double?, currency: String) -> String {
-        guard let value, value.isFinite else { return "—" }
-        return (value < 0 ? "−" : "") + moneyPrefix(currency) + DisplayFormat.number(abs(value), digits: 0)
-    }
-
     private func signedMoney(_ value: Double, currency: String) -> String {
         (value > 0 ? "+" : "") + money(value, currency: currency)
     }
@@ -576,21 +696,38 @@ struct PortfolioView: View {
         }
     }
 
+    /// `force` is pull-to-refresh. Otherwise a store snapshot younger than `storeFreshness` is reused
+    /// and only the risk report is filled in.
     @MainActor
-    private func load() async {
+    private func load(force: Bool = false) async {
         guard !loading, let client = store.client else { return }
+        if !force, store.portfolioSummary != nil, snapshot != nil,
+           let refreshedAt = store.refreshedAt, Date().timeIntervalSince(refreshedAt) < Self.storeFreshness {
+            error = nil
+            if risk == nil { await loadRisk(client) }
+            return
+        }
+        let baseURL = store.baseURL
         loading = true
         error = nil
         defer { loading = false }
+        let result: PortfolioSnapshot
         do {
-            let result = try await client.portfolioSnapshot()
-            guard !Task.isCancelled else { return }
+            result = try await client.portfolioSnapshot()
+            guard !Task.isCancelled, store.baseURL == baseURL else { return }
             snapshot = result
         } catch {
             if !Task.isCancelled { self.error = error.localizedDescription }
             return
         }
         // 洞察卡是加值，快照先畫出來再補；舊服務沒有這條路由或失敗時，只少集中度與產業。
+        await loadRisk(client)
+        // Hand the fresh snapshot back so the Today tab and the next visit start from it.
+        if store.baseURL == baseURL { store.portfolioSummary = result }
+    }
+
+    @MainActor
+    private func loadRisk(_ client: DSAClient) async {
         if let report = try? await client.portfolioRisk(), !Task.isCancelled {
             risk = report
         }
@@ -598,10 +735,10 @@ struct PortfolioView: View {
 }
 
 private extension View {
-    /// List 列去掉系統底色與分隔線，看起來跟其他捲動頁一樣。
-    func plainRow(top: CGFloat = 6, bottom: CGFloat = 6, separator: Bool = false) -> some View {
-        listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets(top: top, leading: 16, bottom: bottom, trailing: 16))
+    /// List 列去掉系統底色與分隔線，看起來跟其他捲動頁一樣；內距走共用的 dsaListRow。
+    func plainRow(_ role: DSAListRowRole, separator: Bool = false) -> some View {
+        dsaListRow(role)
+            .listRowBackground(Color.clear)
             .listRowSeparator(separator ? .visible : .hidden)
             .listRowSeparatorTint(Theme.border)
     }

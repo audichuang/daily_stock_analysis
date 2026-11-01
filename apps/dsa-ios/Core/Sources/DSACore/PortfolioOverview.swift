@@ -218,6 +218,17 @@ public struct PortfolioInsight: Identifiable, Equatable, Sendable {
     public let value: String
     public let detail: String
     public let isAlert: Bool
+    /// Signed value the screen colours with the up/down convention; nil keeps the neutral text colour.
+    public let changeValue: Double?
+
+    public init(id: String, title: String, value: String, detail: String, isAlert: Bool, changeValue: Double? = nil) {
+        self.id = id
+        self.title = title
+        self.value = value
+        self.detail = detail
+        self.isAlert = isAlert
+        self.changeValue = changeValue
+    }
 }
 
 public enum PortfolioInsights {
@@ -228,22 +239,28 @@ public enum PortfolioInsights {
         var result: [PortfolioInsight] = []
         if let top = risk?.concentration?.topPositions?.first, let weight = top.weightPct {
             let name = allPositions.first { $0.symbol.uppercased() == top.symbol.uppercased() }?.name
-            result.append(PortfolioInsight(id: "concentration", title: "集中度", value: DisplayNumber.number(weight, digits: 1) + "%",
-                                           detail: name ?? top.symbol, isAlert: top.isAlert == true))
+            result.append(PortfolioInsight(id: "concentration", title: "最大持股", value: DisplayNumber.number(weight, digits: 1) + "%",
+                                           detail: "\(name ?? top.symbol) · 佔總資產", isAlert: top.isAlert == true))
         }
         let losers = positions.filter { $0.priceAvailable && ($0.unrealizedPnlPct ?? 0) < 0 }
         if let worst = losers.min(by: { ($0.unrealizedPnlPct ?? 0) < ($1.unrealizedPnlPct ?? 0) }) {
             result.append(PortfolioInsight(id: "loss", title: "最大虧損", value: DisplayNumber.percent(worst.unrealizedPnlPct, digits: 1),
-                                           detail: worst.name ?? worst.symbol, isAlert: false))
+                                           detail: worst.name ?? worst.symbol, isAlert: false, changeValue: worst.unrealizedPnlPct))
         } else if !positions.isEmpty {
             // 缺報價、損益未知或缺匯率的部位還沒被判定過，不能說沒有虧損。
             let allKnown = allPositions.allSatisfy { $0.priceAvailable && $0.unrealizedPnlPct != nil } && positions.count == allPositions.count
             result.append(PortfolioInsight(id: "loss", title: "最大虧損", value: DisplayNumber.noValue, detail: allKnown ? "目前沒有虧損部位" : "部分部位損益未知", isAlert: false))
         }
-        if let sector = risk?.sectorConcentration?.topSectors?.first, let weight = sector.weightPct {
+        if let sector = risk?.sectorConcentration?.topSectors?.first, let weight = sector.weightPct, isClassified(sector.sector) {
             result.append(PortfolioInsight(id: "sector", title: "最大產業", value: DisplayNumber.number(weight, digits: 1) + "%",
                                            detail: sector.sector, isAlert: sector.isAlert == true))
         }
         return result
+    }
+
+    /// The backend buckets positions without an industry as UNCLASSIFIED / unknown; that is not a sector worth a card.
+    static func isClassified(_ sector: String) -> Bool {
+        let key = sector.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return !["", "unclassified", "unknown"].contains(key)
     }
 }

@@ -211,6 +211,16 @@ public struct DSAClient: Sendable {
         try await get(["portfolio", "risk"], query: [URLQueryItem(name: "display_currency", value: displayCurrency)])
     }
 
+    /// 今日頁持股待辦用；`group_latest` 才帶 is_held 與停損狀態，`sort=priority` 需搭配 `group_latest=true`。
+    public func decisionSignals(holdingOnly: Bool = false, groupLatest: Bool = false, sort: String? = nil,
+                                pageSize: Int = 100) async throws -> DecisionSignalListResponse {
+        var query = [URLQueryItem(name: "holding_only", value: holdingOnly ? "true" : "false"),
+                     URLQueryItem(name: "group_latest", value: groupLatest ? "true" : "false"),
+                     URLQueryItem(name: "page_size", value: String(pageSize))]
+        if let sort { query.append(URLQueryItem(name: "sort", value: sort)) }
+        return try await get(["decision-signals"], query: query)
+    }
+
     private func get<T: Decodable>(_ path: [String], query: [URLQueryItem] = []) async throws -> T {
         let url = try makeURL(path: path, query: query)
         return try await perform(URLRequest(url: url))

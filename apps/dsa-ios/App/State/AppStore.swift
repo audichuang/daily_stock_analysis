@@ -37,6 +37,9 @@ final class AppStore: ObservableObject {
     }
     @Published var portfolioSummaryFailed = false
     @Published private(set) var heldKeys: Set<String> = []
+    /// 今日頁持股待辦卡；nil 代表還沒讀到。失敗另記旗標，不能當成沒有待辦。
+    @Published var holdingTodos: HoldingTodoList?
+    @Published var holdingTodosFailed = false
     @Published var alertMonitor: AlertMonitorStatus?
     @Published var alertMonitorFailed = false
     @Published var colorConvention: MarketColorConvention {
@@ -49,6 +52,7 @@ final class AppStore: ObservableObject {
     private(set) var toolWebDataStore: WKWebsiteDataStore
     private var generation = UUID()
     private var portfolioSummaryLoading = false
+    private var holdingTodosLoading = false
     /// 已讀過詳情的複盤 id（含沒有 payload 的），避免每次下拉都重抓；失敗的不記，下輪再試。
     private var loadedReviewIDs: Set<Int> = []
     private var loadingReviewIDs: Set<Int> = []
@@ -243,6 +247,8 @@ final class AppStore: ObservableObject {
         async let history: Void = loadReports(client, generation: currentGeneration)
         // 帶即時價的持股快照比其他請求慢很多，不併入這輪等待：下拉更新與事件卡都等 refreshedAt。
         Task { await loadPortfolioSummary(client, generation: currentGeneration) }
+        // 同上：由 store 自己的 Task 載入，不讓 .refreshable 取消，也不拖慢 refreshedAt。
+        Task { await loadHoldingTodos(client, generation: currentGeneration) }
         _ = await (watch, market, history)
         guard generation == currentGeneration else { return }
         refreshing = false
@@ -289,6 +295,12 @@ final class AppStore: ObservableObject {
         guard let client, connected else { return }
         let current = generation
         Task { await loadPortfolioSummary(client, generation: current) }
+    }
+
+    func retryHoldingTodos() {
+        guard let client, connected else { return }
+        let current = generation
+        Task { await loadHoldingTodos(client, generation: current) }
     }
 
     func saveWatchlistGroups(_ groups: [WatchlistGroup]) async throws {
@@ -390,6 +402,21 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// 失敗只影響持股待辦卡，不寫進 errors、不登出。
+    private func loadHoldingTodos(_ client: DSAClient, generation expected: UUID) async {
+        guard !holdingTodosLoading else { return }
+        holdingTodosLoading = true
+        defer { holdingTodosLoading = false }
+        do {
+            let response = try await client.decisionSignals(holdingOnly: true, groupLatest: true, sort: "priority")
+            guard generation == expected else { return }
+            holdingTodos = HoldingTodo.build(items: response.items, signalTotal: response.total)
+            holdingTodosFailed = false
+        } catch {
+            if generation == expected { holdingTodosFailed = true }
+        }
+    }
+
     private func loadReports(_ client: DSAClient, generation expected: UUID) async {
         do {
             async let stocks = client.historyList(limit: 50)
@@ -434,6 +461,7 @@ final class AppStore: ObservableObject {
         stockIndex = []; errors = [:]; refreshedAt = nil
         marketPhase = nil; marketOpen = nil; indicesLoading = false
         portfolioSummary = nil; portfolioSummaryFailed = false
+        holdingTodos = nil; holdingTodosFailed = false
         marketReviewPayloads = [:]; loadedReviewIDs = []; loadingReviewIDs = []
     }
 }

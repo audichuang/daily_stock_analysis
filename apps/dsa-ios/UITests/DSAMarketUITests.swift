@@ -839,6 +839,32 @@ final class DSAMarketUITests: XCTestCase {
         logoutFromToolsAfterLogin()
     }
 
+    func testTodayHoldingTodosCardShowsRowsAndFailure() throws {
+        login()
+        XCTAssertTrue(app.navigationBars["今日"].waitForExistence(timeout: 10))
+        let card = app.descendants(matching: .any)["today.holdingTodos"].firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 15), "資產卡下方要有持股待辦卡")
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "today.holdingTodos.row."))
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertGreaterThanOrEqual(rows.count, 1, "持股待辦至少一列")
+        // Fixture: 2317 已觸停損排第一。
+        XCTAssertTrue(app.buttons["today.holdingTodos.row.2317.TW"].exists)
+        XCTAssertTrue(app.buttons["today.holdingTodos.all"].exists)
+        capture("今日-持股待辦")
+
+        // 讀取失敗要明講，不能變成「持股無待處理」。
+        try setFixtureFailure("decision-signals", true)
+        addTeardownBlock { [self] in try? setFixtureFailure("decision-signals", false) }
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["今日"].waitForExistence(timeout: 20))
+        XCTAssertTrue(text(containing: "暫時無法讀取持股待辦").waitForExistence(timeout: 15))
+        XCTAssertFalse(text(containing: "持股無待處理").exists)
+        capture("今日-持股待辦失敗")
+        try setFixtureFailure("decision-signals", false)
+        logoutFromToolsAfterLogin()
+    }
+
     func testWatchlistSortMetricSwipeAndSearchAdd() throws {
         login()
         tap(app.tabBars.buttons["自選"])

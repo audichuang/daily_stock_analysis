@@ -17,6 +17,7 @@ struct MarketHomeView: View {
                 marketStatusRow
                 reviewCard
                 assetCard
+                holdingTodosCard
                 UpcomingEventsCard()
                 watchlistSection
                 Text("下拉更新 · \(store.refreshedAt.map { $0.formatted(date: .omitted, time: .shortened) } ?? "尚未更新")　AI 評分不是勝率")
@@ -237,6 +238,83 @@ struct MarketHomeView: View {
                     .accessibilityIdentifier("today.assets.retry")
             }
         }
+    }
+
+    // MARK: - 持股待辦
+
+    /// 已觸停損、近停損、減碼／賣出各一列，最多三列；讀取中不佔位，失敗不能說成沒有待辦。
+    @ViewBuilder private var holdingTodosCard: some View {
+        if store.holdingTodosFailed {
+            InlineStatusRow(message: "暫時無法讀取持股待辦") { store.retryHoldingTodos() }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("today.holdingTodos.failed")
+        } else if let todos = store.holdingTodos {
+            DSACard(style: .flat) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text("持股待辦").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                        if todos.total > 0 {
+                            Text("\(todos.total)").font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .accessibilityElement(children: .combine)
+                    if todos.items.isEmpty {
+                        Text("持股無待處理").font(.caption).foregroundStyle(Theme.secondary)
+                            .frame(minHeight: 32)
+                    } else {
+                        ForEach(todos.items) { item in
+                            NavigationLink { StockDetailView(code: item.code) } label: { holdingTodoRow(item) }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("today.holdingTodos.row.\(item.code)")
+                        }
+                    }
+                    if todos.signalTotal > 0 {
+                        NavigationLink {
+                            ToolWebView(path: "/decision-signals?holding=1", title: "AI 建議")
+                        } label: {
+                            HStack(spacing: 4) {
+                                Spacer(minLength: 0)
+                                Text("全部 \(todos.signalTotal) 檔")
+                                Image(systemName: "chevron.right").accessibilityHidden(true)
+                            }
+                            .font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("today.holdingTodos.all")
+                    }
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("today.holdingTodos")
+        }
+    }
+
+    private func holdingTodoRow(_ item: HoldingTodoItem) -> some View {
+        let titles = item.titles
+        return HStack(spacing: 8) {
+            ActionBadge(action: item.signal.action, label: item.signal.actionLabel, size: .compact)
+            Text(titles.primary).font(.subheadline).foregroundStyle(Theme.text).lineLimit(1)
+            if let secondary = titles.secondary {
+                Text(secondary).font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if let stopText = item.stopText {
+                Text(stopText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(item.kind == .stopTriggered ? Theme.danger : (item.isStopWarning ? Theme.warning : Theme.secondary))
+                    .lineLimit(1).minimumScaleFactor(0.8)
+            }
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
+                .accessibilityHidden(true)
+        }
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("點開查看個股")
     }
 
     // MARK: - 我的關注

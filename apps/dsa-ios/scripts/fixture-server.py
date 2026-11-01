@@ -304,6 +304,27 @@ def calendar_events(query):
     return {"events": events, "undated": undated, "cache_updated_at": datetime.now(timezone.utc).isoformat()}
 
 
+def decision_signals(query):
+    """持股決策訊號（group_latest 形狀）：已觸停損、近停損、減碼各一。"""
+    rows = [
+        # code, action, stop_loss, stop_triggered
+        ("2317.TW", "sell", 102.0, True),
+        ("2303.TW", "hold", 44.5, False),
+        ("2330.TW", "reduce", 540.0, False),
+    ]
+    items = []
+    for index, (code, action, stop_loss, triggered) in enumerate(rows):
+        items.append({
+            "id": 900 + index, "stock_code": code, "stock_name": STOCKS[code][0], "market": STOCKS[code][3],
+            "source_type": "analysis", "trigger_source": "fixture", "action": action, "action_label": None,
+            "stop_loss": stop_loss, "plan_quality": "complete", "status": "active", "created_at": AS_OF,
+            "older_count": 0, "is_held": True, "stop_triggered": triggered,
+            "last_close": STOCKS[code][1], "last_close_date": "2024-01-31",
+        })
+    page_size = int(query.get("page_size", ["20"])[0])
+    return {"items": items[:page_size], "total": len(items), "page": 1, "page_size": page_size}
+
+
 class State:
     def watchlist_groups_payload(self):
         # 與真 API 同語意：成員以自選為準、一檔只屬於一組。
@@ -563,6 +584,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {"task_id": route[4], "status": "completed" if complete else "processing",
                                        "progress": 100 if complete else task["polls"] * 30,
                                        "result": result, "error": None, "stock_name": STOCKS[task["code"]][0]})
+            if route == ["api", "v1", "decision-signals"]:
+                # 今日頁持股待辦卡；UI 測試以 /__fixture/fail?target=decision-signals 注入 500。
+                if "decision-signals" in STATE.failing:
+                    return self.reply(500, {"error": "fixture", "message": "合成決策訊號失敗"})
+                return self.reply(200, decision_signals(query))
             if route == ["api", "v1", "portfolio", "snapshot"]:
                 return self.reply(200, portfolio(query.get("display_currency", [None])[0],
                                                  query.get("include_funds") == ["true"]))

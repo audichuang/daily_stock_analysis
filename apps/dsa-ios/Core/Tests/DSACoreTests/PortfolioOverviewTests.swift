@@ -108,8 +108,25 @@ final class PortfolioOverviewTests: XCTestCase {
         let insights = PortfolioInsights.make(snapshot: value, risk: risk)
         XCTAssertEqual(insights.map(\.id), ["concentration", "loss", "sector"])
         XCTAssertTrue(insights[0].isAlert)
+        XCTAssertEqual(insights[0].title, "最大持股")
+        XCTAssertEqual(insights[0].detail, "2330.TW · 佔總資產")
         XCTAssertEqual(insights[1].detail, "0050.TW", "虧損比百分比，不比金額")
-        XCTAssertEqual(insights[2].detail, "半導體")
+        XCTAssertEqual(try XCTUnwrap(insights[1].changeValue), -33.3, accuracy: 0.001, "最大虧損要用漲跌色")
+        XCTAssertEqual(insights[2].detail, "半導體", "正常產業仍要產生產業卡")
+    }
+
+    func testUnclassifiedSectorProducesNoSectorCard() throws {
+        let value = try snapshot(accounts: [account(1, market: "tw", currency: "TWD", positions: [position("2330.TW", value: 600, pnl: 10, cost: 590, quantity: 1, pct: 1.7)])])
+        for label in ["UNCLASSIFIED", "unknown", " "] {
+            let risk = try decode(PortfolioRiskReport.self, [
+                "sector_concentration": ["top_sectors": [["sector": label, "weight_pct": 80.0] as [String: Any]]]
+            ])
+            XCTAssertEqual(PortfolioInsights.make(snapshot: value, risk: risk).map(\.id), ["loss"], "「\(label)」不是產業，不產生產業卡")
+        }
+        let classified = try decode(PortfolioRiskReport.self, [
+            "sector_concentration": ["top_sectors": [["sector": "半導體", "weight_pct": 80.0] as [String: Any]]]
+        ])
+        XCTAssertEqual(PortfolioInsights.make(snapshot: value, risk: classified).map(\.id), ["loss", "sector"])
     }
 
     func testInsightsSurviveRiskFailureAndHideNullWeights() throws {
