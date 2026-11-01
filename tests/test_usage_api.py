@@ -3,7 +3,7 @@
 
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -115,6 +115,42 @@ class UsageDashboardApiTestCase(unittest.TestCase):
         self.assertEqual(body["recent_calls"][0]["channel"], "litellm")
         self.assertEqual(body["recent_calls"][0]["billing"], "metered")
         self.assertEqual(body["recent_total"], 1)
+
+    def test_dashboard_day_narrows_records_but_keeps_period_totals(self):
+        seen = {}
+
+        class RecordingDb(FakeUsageDbManager):
+            def get_llm_usage_records(self, from_dt, to_dt, **kwargs):
+                seen["records"] = (from_dt, to_dt)
+                return super().get_llm_usage_records(from_dt, to_dt, **kwargs)
+
+            def count_llm_usage_records(self, from_dt, to_dt, **kwargs):
+                seen["count"] = (from_dt, to_dt)
+                return super().count_llm_usage_records(from_dt, to_dt, **kwargs)
+
+            def get_llm_usage_summary(self, from_dt, to_dt, **kwargs):
+                seen["summary"] = (from_dt, to_dt)
+                return super().get_llm_usage_summary(from_dt, to_dt, **kwargs)
+
+        # 全部期間的上界是現在，取昨天才不會被上界夾住。
+        day = (datetime.now() - timedelta(days=1)).date()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(static_dir=Path(temp_dir))
+            app.dependency_overrides[get_database_manager] = lambda: RecordingDb()
+            response = TestClient(app).get(f"/api/v1/usage/dashboard?period=all&day={day.isoformat()}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(seen["records"][0].date(), day)
+        self.assertEqual(seen["records"][1].date(), day)
+        self.assertEqual(seen["records"], seen["count"])
+        self.assertEqual(seen["summary"][0].year, 2000)
+
+    def test_dashboard_rejects_invalid_day(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(static_dir=Path(temp_dir))
+            app.dependency_overrides[get_database_manager] = lambda: FakeUsageDbManager()
+            response = TestClient(app).get("/api/v1/usage/dashboard?day=not-a-date")
+        self.assertEqual(response.status_code, 422)
 
     def test_dashboard_rejects_unknown_sort(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -44,6 +44,12 @@ function mapDataset(raw: Record<string, unknown>): DataDatasetQuality {
     fallbackFrom: strings(raw.fallback_from),
     coverage: (raw.coverage as Record<string, unknown> | null | undefined) ?? null,
     warnings: strings(raw.warnings),
+    dataDate: raw.data_date == null ? null : String(raw.data_date),
+    dataMarket: raw.data_market == null ? null : String(raw.data_market),
+    expectedDate: raw.expected_date == null ? null : String(raw.expected_date),
+    isCurrent: raw.is_current == null ? null : Boolean(raw.is_current),
+    reason: raw.reason == null ? null : String(raw.reason),
+    fallbackActive: Boolean(raw.fallback_active),
   };
 }
 

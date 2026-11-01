@@ -173,6 +173,31 @@ describe('AlertRuleForm', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it('shows the invalid code error in Traditional Chinese for the zh-TW UI', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh-TW');
+    render(<UiLanguageProvider><AlertRuleForm onSubmit={onSubmit} /></UiLanguageProvider>);
+
+    fireEvent.change(screen.getByLabelText('標的代號'), { target: { value: 'aapl-2026' } });
+    fireEvent.change(screen.getByLabelText('價格閾值'), { target: { value: '200' } });
+    fireEvent.click(screen.getByRole('button', { name: '建立規則' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('股票代號格式不正確');
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('shows a readable watchlist target but still submits the machine value', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh-TW');
+    render(<UiLanguageProvider><AlertRuleForm onSubmit={onSubmit} /></UiLanguageProvider>);
+
+    fireEvent.change(screen.getByLabelText('目標範圍'), { target: { value: 'watchlist' } });
+    expect(screen.queryByDisplayValue('default')).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue('自選股任一檔')).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('價格閾值'), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: '建立規則' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ target: 'default' })));
+  });
+
   it('rejects invalid stock code format before submit', () => {
     render(<AlertRuleForm onSubmit={onSubmit} />);
 

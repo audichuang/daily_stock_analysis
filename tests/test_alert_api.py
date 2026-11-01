@@ -83,6 +83,22 @@ class AlertApiTestCase(unittest.TestCase):
         self.temp_dir.cleanup()
         _reset_auth_globals()
 
+    def test_rule_search_matches_part_of_target_or_name(self):
+        rule = self._create_rule({"target": "2330.TW", "name": "台積電 站上"})
+        self._create_rule({"target": "AAPL", "name": "Apple"})
+
+        by_code = self.client.get("/api/v1/alerts/rules?q=2330").json()
+        by_name = self.client.get("/api/v1/alerts/rules", params={"q": "台積"}).json()
+        exact = self.client.get("/api/v1/alerts/rules?target=2330").json()
+        wildcard = self.client.get("/api/v1/alerts/rules", params={"q": "%"}).json()
+
+        self.assertEqual([item["id"] for item in by_code["items"]], [rule["id"]])
+        self.assertEqual([item["id"] for item in by_name["items"]], [rule["id"]])
+        # target 仍是完全相符，個股頁等呼叫端靠這個語意。
+        self.assertEqual(exact["items"], [])
+        # LIKE 萬用字元要當字面值，否則搜尋 % 會列出全部。
+        self.assertEqual(wildcard["items"], [])
+
     def _create_rule(self, payload: dict | None = None) -> dict:
         body = {
             "name": "Moutai breakout",

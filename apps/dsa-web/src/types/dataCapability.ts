@@ -34,6 +34,13 @@ export type DataDatasetQuality = {
   fallbackFrom: string[];
   coverage?: Record<string, unknown> | null;
   warnings: string[];
+  /** 資料本身的最新日；與 lastSuccess（來源最近成功）不同。 */
+  dataDate?: string | null;
+  dataMarket?: string | null;
+  expectedDate?: string | null;
+  isCurrent?: boolean | null;
+  reason?: string | null;
+  fallbackActive?: boolean;
 };
 
 export type DataPriorityView = {
