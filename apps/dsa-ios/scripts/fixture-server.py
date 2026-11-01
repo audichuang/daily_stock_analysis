@@ -88,11 +88,17 @@ def intraday(code):
     day = "2024-01-31" if market == "tw" else "2024-01-30"
     count = minutes // 5 + 1
     points = []
+    cum_value, cum_volume = 0.0, 0.0
     for index in range(count):
         minute = start + index * 5
         wave = math.sin(index / 9) * price * 0.006 + (index - count) * price * 0.00005
+        point_price = round(price + wave if index < count - 1 else price, 2)
+        volume = 200_000 + (index % 7) * 50_000
+        cum_value += point_price * volume
+        cum_volume += volume
         points.append({"t": f"{day}T{minute // 60:02d}:{minute % 60:02d}:00{tz}",
-                       "price": round(price + wave if index < count - 1 else price, 2)})
+                       "price": point_price, "volume": volume,
+                       "avg_price": round(cum_value / cum_volume, 4)})
     return points
 
 
