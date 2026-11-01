@@ -109,9 +109,9 @@ function actualMovementBadge(movement: string | null | undefined, language: UiLa
   const labels = BACKTEST_MOVEMENT_LABELS[language];
   switch (movement) {
     case 'up':
-      return <Badge variant="success">{labels.up}</Badge>;
+      return <Badge variant="neutral" className="text-market-up">{labels.up}</Badge>;
     case 'down':
-      return <Badge variant="danger">{labels.down}</Badge>;
+      return <Badge variant="neutral" className="text-market-down">{labels.down}</Badge>;
     case 'flat':
       return <Badge variant="warning">{labels.flat}</Badge>;
     default:
