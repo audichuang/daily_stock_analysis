@@ -109,7 +109,7 @@ final class PortfolioOverviewTests: XCTestCase {
         XCTAssertEqual(insights.map(\.id), ["concentration", "loss", "sector"])
         XCTAssertTrue(insights[0].isAlert)
         XCTAssertEqual(insights[0].title, "最大持股")
-        XCTAssertEqual(insights[0].detail, "2330.TW · 佔總資產")
+        XCTAssertEqual(insights[0].detail, "2330.TW · 佔持股市值")
         XCTAssertEqual(insights[1].detail, "0050.TW", "虧損比百分比，不比金額")
         XCTAssertEqual(try XCTUnwrap(insights[1].changeValue), -33.3, accuracy: 0.001, "最大虧損要用漲跌色")
         XCTAssertEqual(insights[2].detail, "半導體", "正常產業仍要產生產業卡")

@@ -22,9 +22,12 @@ public struct DecisionSignalSummary: Decodable, Sendable, Equatable {
     public let stopLoss: Double?
     public let stopTriggered: Bool?
     public let lastClose: Double?
+    /// nil（舊後端或測試）視為有效；非 active 的訊號不進待辦。
+    public let status: String?
 
     public init(stockCode: String, stockName: String? = nil, action: String, actionLabel: String? = nil,
-                isHeld: Bool? = nil, stopLoss: Double? = nil, stopTriggered: Bool? = nil, lastClose: Double? = nil) {
+                isHeld: Bool? = nil, stopLoss: Double? = nil, stopTriggered: Bool? = nil, lastClose: Double? = nil,
+                status: String? = nil) {
         self.stockCode = stockCode
         self.stockName = stockName
         self.action = action
@@ -33,6 +36,7 @@ public struct DecisionSignalSummary: Decodable, Sendable, Equatable {
         self.stopLoss = stopLoss
         self.stopTriggered = stopTriggered
         self.lastClose = lastClose
+        self.status = status
     }
 
     /// Percent move from the last close down to the stop: −2.1 means the stop is 2.1% below the close.
@@ -110,7 +114,8 @@ public enum HoldingTodo {
     public static func build(items: [DecisionSignalSummary], signalTotal: Int? = nil) -> HoldingTodoList {
         let ranked = items.enumerated().compactMap { offset, signal -> (Int, HoldingTodoItem)? in
             // The endpoint is called with holding_only; an explicit false still means not held.
-            guard signal.isHeld != false, let kind = kind(of: signal) else { return nil }
+            guard signal.isHeld != false, signal.status == nil || signal.status == "active",
+                  let kind = kind(of: signal) else { return nil }
             return (offset, HoldingTodoItem(signal: signal, kind: kind))
         }
         let sorted = ranked.sorted { lhs, rhs in

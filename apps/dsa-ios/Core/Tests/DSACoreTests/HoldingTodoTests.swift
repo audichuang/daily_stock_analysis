@@ -4,9 +4,34 @@ import XCTest
 
 final class HoldingTodoTests: XCTestCase {
     private func signal(_ code: String, action: String, stop: Double? = nil, close: Double? = nil,
-                        triggered: Bool? = nil, held: Bool? = true) -> DecisionSignalSummary {
+                        triggered: Bool? = nil, held: Bool? = true, status: String? = nil) -> DecisionSignalSummary {
         DecisionSignalSummary(stockCode: code, stockName: nil, action: action, isHeld: held,
-                              stopLoss: stop, stopTriggered: triggered, lastClose: close)
+                              stopLoss: stop, stopTriggered: triggered, lastClose: close, status: status)
+    }
+
+    func testClosedAndExpiredSignalsAreNotTodos() {
+        let items = [
+            signal("1101.TW", action: "reduce", status: "closed"),
+            signal("2303.TW", action: "sell", status: "expired"),
+            signal("2330.TW", action: "sell", status: "active"),
+            signal("2454.TW", action: "reduce"),
+        ]
+        XCTAssertEqual(HoldingTodo.build(items: items).items.map(\.code), ["2330.TW", "2454.TW"])
+    }
+
+    func testDecisionSignalQueryCarriesStatus() {
+        let withStatus = DSAClient.decisionSignalQuery(holdingOnly: true, groupLatest: true, sort: "priority",
+                                                       status: "active", pageSize: 100)
+        XCTAssertTrue(withStatus.contains(URLQueryItem(name: "status", value: "active")))
+        let without = DSAClient.decisionSignalQuery(holdingOnly: true, groupLatest: true, sort: nil,
+                                                    status: nil, pageSize: 100)
+        XCTAssertFalse(without.contains { $0.name == "status" })
+    }
+
+    func testMarketReviewTitleFollowsReportName() {
+        XCTAssertEqual(ReportText.marketReviewTitle(stockName: "美股大盤複盤"), "美股大盤複盤")
+        XCTAssertEqual(ReportText.marketReviewTitle(stockName: "  "), "大盤複盤")
+        XCTAssertEqual(ReportText.marketReviewTitle(stockName: nil), "大盤複盤")
     }
 
     func testOrderIsStopTriggeredThenNearStopThenReduceOrSell() {

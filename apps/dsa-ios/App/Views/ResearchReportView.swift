@@ -112,7 +112,7 @@ struct ResearchReportView: View {
     /// Stock name once loaded; market reviews get a fixed title.
     private var navigationTitle: String {
         guard let report else { return "AI 研究" }
-        if isMarketReview(report) { return "台股大盤複盤" }
+        if isMarketReview(report) { return ReportText.marketReviewTitle(stockName: report.meta.stockName) }
         return ReportText.firstNonEmpty(report.meta.stockName) ?? report.meta.stockCode
     }
 

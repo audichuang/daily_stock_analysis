@@ -153,6 +153,9 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// 畫面顯示已連線但 client 已被清掉（Access 憑證變更後）。
+    var needsReconnect: Bool { connected && client == nil }
+
     func hasAccessCredentials() -> Bool {
         guard let url = ServerAddress.normalized(serverAddress) else { return false }
         return (try? AccessVault.load(for: url)) != nil
@@ -408,7 +411,8 @@ final class AppStore: ObservableObject {
         holdingTodosLoading = true
         defer { holdingTodosLoading = false }
         do {
-            let response = try await client.decisionSignals(holdingOnly: true, groupLatest: true, sort: "priority")
+            let response = try await client.decisionSignals(holdingOnly: true, groupLatest: true, sort: "priority",
+                                                         status: "active")
             guard generation == expected else { return }
             holdingTodos = HoldingTodo.build(items: response.items, signalTotal: response.total)
             holdingTodosFailed = false

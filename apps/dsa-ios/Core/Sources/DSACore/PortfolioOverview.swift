@@ -240,7 +240,7 @@ public enum PortfolioInsights {
         if let top = risk?.concentration?.topPositions?.first, let weight = top.weightPct {
             let name = allPositions.first { $0.symbol.uppercased() == top.symbol.uppercased() }?.name
             result.append(PortfolioInsight(id: "concentration", title: "最大持股", value: DisplayNumber.number(weight, digits: 1) + "%",
-                                           detail: "\(name ?? top.symbol) · 佔總資產", isAlert: top.isAlert == true))
+                                           detail: "\(name ?? top.symbol) · 佔持股市值", isAlert: top.isAlert == true))
         }
         let losers = positions.filter { $0.priceAvailable && ($0.unrealizedPnlPct ?? 0) < 0 }
         if let worst = losers.min(by: { ($0.unrealizedPnlPct ?? 0) < ($1.unrealizedPnlPct ?? 0) }) {

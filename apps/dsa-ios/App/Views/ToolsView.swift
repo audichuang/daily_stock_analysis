@@ -228,6 +228,8 @@ private struct ConnectionDetailView: View {
         .onAppear { accessConfigured = store.hasAccessCredentials() }
         .sheet(isPresented: $showingAccess, onDismiss: {
             accessConfigured = store.hasAccessCredentials()
+            // 存／移除憑證會清掉 client；沒按「套用並重新連線」就關閉時要補重連，否則畫面仍顯示已連線卻不再載入。
+            if store.needsReconnect { Task { await store.submitConnection() } }
         }) {
             AccessCredentialsSheet()
                 .environmentObject(store)

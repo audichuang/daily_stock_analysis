@@ -128,6 +128,11 @@ public enum ReportMath {
 }
 
 public enum ReportText {
+    /// 大盤複盤標題跟著報告自己的名稱（台股／美股），沒有名稱才用不分市場的通稱。
+    public static func marketReviewTitle(stockName: String?) -> String {
+        firstNonEmpty(stockName) ?? "大盤複盤"
+    }
+
     /// 依序取第一個非空字串；結論列的「一句話 → 摘要」都走這裡。
     public static func firstNonEmpty(_ candidates: String?...) -> String? {
         for candidate in candidates {
