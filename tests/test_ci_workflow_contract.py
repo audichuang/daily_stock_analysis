@@ -89,6 +89,9 @@ def test_heavy_ci_jobs_are_path_filtered_and_backend_tests_are_sharded() -> None
     assert backend_filters["backend_non_web"] == [
         "**",
         "!apps/dsa-web/**",
+        # fork：journal 與 iOS 只改它們時不跑後端（守門在 test_fork_infra_docs_contracts.py）
+        "!journal/**",
+        "!apps/dsa-ios/**",
         "!docs/**",
         "!**/*.md",
         "!LICENSE",

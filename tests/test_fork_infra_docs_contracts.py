@@ -85,6 +85,30 @@ def test_docker_filter_still_skips_docs_only_changes():
         assert not _filter_output([path], rules), path
 
 
+def _backend_rules() -> list[str]:
+    import yaml
+
+    ci = _workflow(".github/workflows/ci.yml")
+    step = next(s for s in ci["jobs"]["changes"]["steps"] if s.get("id") == "backend-filter")
+    return yaml.load(str(step["with"]["filters"]), Loader=yaml.BaseLoader)["backend_non_web"]
+
+
+def test_backend_filter_skips_journal_and_ios_only_changes():
+    # 排程每天自動推 journal/*.jsonl 到 develop；不排除就每筆都跑完整 4 片後端測試。
+    rules = _backend_rules()
+    for path in ("journal/media-picks-verdicts.jsonl", "journal/closed-dates.txt",
+                 "apps/dsa-ios/App/ContentView.swift", "apps/dsa-ios/Core/Package.swift"):
+        assert not _filter_output([path], rules), path
+
+
+def test_backend_filter_still_runs_for_backend_inputs_next_to_skipped_paths():
+    # 反向：排除不能擴大到相鄰的程式碼（腳本、.claude 底下的程式、後端、測試）。
+    rules = _backend_rules()
+    for path in ("scripts/verify_swing_decisions.py", ".claude/skills/verify/scripts/instance.py",
+                 "src/agent/chat_object_decision.py", "market_data/db.py", "tests/test_x.py"):
+        assert _filter_output([path], rules), path
+
+
 def _serve_path_market_data_modules() -> set[str]:
     modules: set[str] = set()
     files = [p for d in ("src", "data_provider", "api", "bot") for p in (REPO_ROOT / d).rglob("*.py")]
