@@ -204,6 +204,9 @@ class ReportMeta(BaseModel):
 class ReportSummary(BaseModel):
     """报告概览区"""
 
+    # model_one_sentence / model_position_advice would otherwise hit pydantic's "model_" namespace warning.
+    model_config = ConfigDict(protected_namespaces=("model_validate", "model_dump"))
+
     analysis_summary: Optional[str] = Field(None, description="关键结论")
     operation_advice: Optional[str] = Field(None, description="操作建议")
     action: Optional[DecisionAction] = Field(None, description="结构化建议动作 taxonomy")
@@ -229,6 +232,18 @@ class ReportSummary(BaseModel):
     exit_triggers: Optional[List[str]] = Field(None, description="出場或改判觸發條件；舊報告為 null")
     pending_events: Optional[List[str]] = Field(None, description="待確認事件；舊報告為 null")
     next_check_time: Optional[str] = Field(None, description="下一次檢查點")
+    model_one_sentence: Optional[str] = Field(
+        None,
+        description="護欄改寫前的模型原句；未套護欄或舊報告為 null",
+    )
+    model_position_advice: Optional[ReportPositionAdvice] = Field(
+        None,
+        description="護欄改寫前的模型分持股建議；未套護欄或舊報告為 null",
+    )
+    guardrail_kind: Optional[Literal["data_unavailable", "market_logic"]] = Field(
+        None,
+        description="護欄類型：data_unavailable＝資料不可用、market_logic＝市場邏輯；未套護欄或舊報告為 null",
+    )
 
 
 class ReportStrategy(BaseModel):

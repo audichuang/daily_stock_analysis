@@ -22,10 +22,10 @@
   },
   "evidence_prompt": "\n\n### 美股補充證據（純資訊）\n預期本益比（yfinance forwardPE，預估盈餘口徑）：15\n放空資料（資料日：fixture-date；非即時）：{\"shares_short\": 123, \"as_of\": \"fixture-date\"}\n近 90 天內部人淨買賣（股；僅可辨識買賣，非完整申報）：{\"buy_shares\": 100, \"sell_shares\": 20}\n近 30 天評等調整摘要；評等可能尚未反映最新事件：{\"count\": 1}\n",
   "prompts": {
-    "zh": "9ac53de4a54f4559319b7ceeb7cb298d7fafab7eb0d94722d57146e2fa3053e3",
-    "zh-TW": "31aefbd77dcd2857069048fa1dd434c62c387021d45aa8228809f77bcec975ec",
-    "en": "a92c54b9d0386446554267910357e0cf8b5203c95a6be15be2e114dfbc3a89d3",
-    "ko": "95d17215ff2f5a1144da37fc3002fad5de9acded91242b09d857040c99532268"
+    "zh": "95457e1a7c6a0dd60fcdbee9ff53a2668ab9ebe891d29fee06e2067705c649fc",
+    "zh-TW": "fa0b56a0b95a1cb19c4f1cb074b6e00507394fb5e54f168d268c1c53423237f9",
+    "en": "5d9f86a4ca1a7c3da0ac9ed550fbe89bae5c4bc8374c88bfd0d3c0f01aeabf47",
+    "ko": "d59455caa132b59c8d3ff94acd8ce68ceadf96ef6ed763d7d518f22217185c68"
   },
   "agent_messages": [
     {

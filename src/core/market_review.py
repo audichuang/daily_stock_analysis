@@ -1123,10 +1123,24 @@ def _leading_blockquote(review_report: str) -> str:
     return ""
 
 
+# Sentence end: CJK terminators anywhere; ASCII ones only before whitespace/end so
+# decimals ("2.49%") and thousands separators never split a sentence.
+_SENTENCE_END_RE = re.compile(r"[。！？；]|[.!?;](?=\s|$)")
+
+
+def _first_sentence(text: str) -> str:
+    match = _SENTENCE_END_RE.search(text)
+    if not match:
+        return text
+    return text[: match.end()].strip() or text
+
+
 def _summarize_market_review(review_report: str, report_language: str) -> str:
+    # The conclusion is the blockquote under the report title; the history list,
+    # iOS today card and Web pinned row show only its first sentence.
     quote = _leading_blockquote(review_report)
     if quote:
-        return quote
+        return _first_sentence(quote)
     for line in (review_report or "").splitlines():
         text = line.strip().lstrip("#").strip()
         if text and not text.startswith("---") and not text.startswith(">"):

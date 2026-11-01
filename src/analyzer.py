@@ -105,6 +105,7 @@ from src.schemas.decision_scale import (
 from src.schemas.report_schema import AnalysisReportSchema
 from src.market_context import detect_market, get_market_role, get_market_guidelines
 from src.services.daily_market_context import format_daily_market_context_prompt_section
+from src.services.report_decision_fields import format_price, preserve_model_advice
 from src.services.tw_backtest_context import (
     format_regime_block,
     format_revenue_momentum_row,
@@ -1910,6 +1911,7 @@ def _apply_hold_watch_dashboard(
     no_position: str,
     has_position: str,
     capital_flow_status: Optional[str] = None,
+    guardrail_kind: Optional[str] = None,
 ) -> None:
     result.operation_advice = advice
 
@@ -1919,6 +1921,7 @@ def _apply_hold_watch_dashboard(
     if not isinstance(core, dict):
         core = {}
         dashboard["core_conclusion"] = core
+    preserve_model_advice(core, guardrail_kind=guardrail_kind)
     core["signal_type"] = (
         "🟡持有观望" if language == "zh"
         else "🟡持有觀望" if language == "zh-TW"
@@ -2000,6 +2003,7 @@ def _downgrade_buy_without_capital_flow(
         no_position=no_position,
         has_position=has_position,
         capital_flow_status=status_text,
+        guardrail_kind="data_unavailable",
     )
     _sync_stability_dashboard_fields(result)
     logger.info("[decision_stability] Downgraded buy because capital flow is unavailable: %s", flow_status)
@@ -2142,6 +2146,7 @@ def _set_structural_hold_wording(
         flow_bias=flow_bias,
         no_position=no_position,
         has_position=has_position,
+        guardrail_kind="market_logic",
     )
     logger.info("[decision_stability] Applied structural hold calibration: %s", reason_key)
 
@@ -4866,6 +4871,28 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 return quote_value
             fallback = _fund_valuation.get(field)
             return fallback if fallback is not None else 'N/A'
+
+        # Realtime table display helpers: a missing/None value must not leak into the
+        # template as "None%" / "N/A%"; prices use thousands separators.
+        _missing_text = 'N/A' if english else L('暫無', '暂无')
+
+        def _rt_number(value: Any) -> Optional[float]:
+            if value is None or isinstance(value, bool):
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        def _rt_pct_text(value: Any) -> str:
+            number = _rt_number(value)
+            return f"{number:.2f}%" if number is not None else _missing_text
+
+        def _rt_price_text(value: Any) -> str:
+            number = _rt_number(value)
+            if number is None or not math.isfinite(number):
+                return 'N/A'
+            return format_price(number, thousands=True)
         # 台股估值（交易所快照）：PE 是近四季口径、各有资料日期，标签明讲，别让模型当成「动态」本益比；
         # 另附交易所公告殖利率一列（其他市场的列与标签维持原样）。
         _tw_val = prompt_market == "tw"
@@ -5034,9 +5061,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 ### Realtime Quote Details
 | Indicator | Value | Interpretation |
 |------|------|------|
-| Current Price | {rt.get('price', 'N/A')} | |
+| Current Price | {_rt_price_text(rt.get('price'))} | |
 | **Volume Ratio{_vr_basis_en}** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
-{_vr_prev_row_en}| **Turnover Rate** | **{rt.get('turnover_rate', 'N/A')}%** | |
+{_vr_prev_row_en}| **Turnover Rate** | **{_rt_pct_text(rt.get('turnover_rate'))}** | |
 {pe_pb_rows_en}| Total Market Cap | {self._format_amount(rt.get('total_mv'), prompt_market, report_language)} | |
 | Float Market Cap | {self._format_amount(rt.get('circ_mv'), prompt_market, report_language)} | |
 | 60-Day Change | {rt.get('change_60d', 'N/A')}% | Medium-term performance |
@@ -5059,9 +5086,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 ### {L("即時行情增強資料", "实时行情增强数据")}
 | {L("指標", "指标")} | {L("數值", "数值")} | {L("解讀", "解读")} |
 |------|------|------|
-| {L("目前價格", "当前价格")} | {rt.get('price', 'N/A')} {ccy} | |
+| {L("目前價格", "当前价格")} | {_rt_price_text(rt.get('price'))} {ccy} | |
 | **{L("量比", "量比")}{_vr_basis_zh}** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
-{_vr_prev_row_zh}| **{L("週轉率", "换手率")}** | **{rt.get('turnover_rate', 'N/A')}%** | |
+{_vr_prev_row_zh}| **{L("週轉率", "换手率")}** | **{_rt_pct_text(rt.get('turnover_rate'))}** | |
 {pe_pb_rows_zh}| {L("總市值", "总市值")} | {self._format_amount(rt.get('total_mv'), prompt_market, report_language)} | |
 | {L("流通市值", "流通市值")} | {self._format_amount(rt.get('circ_mv'), prompt_market, report_language)} | |
 | {L("60日漲跌幅", "60日涨跌幅")} | {rt.get('change_60d', 'N/A')}% | {L("中期表現", "中期表现")} |

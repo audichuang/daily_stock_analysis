@@ -51,8 +51,8 @@ def _text_list(value: Any) -> Optional[List[str]]:
 
 
 def extract_report_decision_fields(raw_result: Any, report_language: Optional[str] = None) -> Dict[str, Any]:
-    """回傳 DECISION_FIELD_KEYS 的值；raw_result 不是 dict 時全為 None。"""
-    fields: Dict[str, Any] = {key: None for key in DECISION_FIELD_KEYS}
+    """回傳 DECISION_FIELD_KEYS 與 MODEL_ADVICE_FIELD_KEYS 的值；raw_result 不是 dict 時全為 None。"""
+    fields: Dict[str, Any] = {key: None for key in (*DECISION_FIELD_KEYS, *MODEL_ADVICE_FIELD_KEYS)}
     if not isinstance(raw_result, Mapping):
         return fields
 
@@ -90,7 +90,61 @@ def extract_report_decision_fields(raw_result: Any, report_language: Optional[st
         pending_events=_text_list(phase.get("pending_events")),
         next_check_time=_text(phase.get("next_check_time")),
     )
+    fields.update(_model_advice_fields(core, guardrail_applied=bool(guardrail_reason)))
     return fields
+
+
+# Keys a guardrail writes into core_conclusion before rewriting the model's wording.
+# Kept out of DECISION_FIELD_KEYS so the research artifact thesis contract is unchanged.
+MODEL_ADVICE_FIELD_KEYS = ("model_one_sentence", "model_position_advice", "guardrail_kind")
+GUARDRAIL_KINDS = ("data_unavailable", "market_logic")
+
+
+def _model_advice_fields(core: Mapping[str, Any], *, guardrail_applied: bool) -> Dict[str, Any]:
+    """Project the preserved model wording; None unless a guardrail was applied."""
+    fields: Dict[str, Any] = {key: None for key in MODEL_ADVICE_FIELD_KEYS}
+    if not guardrail_applied:
+        return fields
+    model_position = _mapping(core, "model_position_advice")
+    no_position = _text(model_position.get("no_position"))
+    has_position = _text(model_position.get("has_position"))
+    kind = core.get("guardrail_kind")
+    fields.update(
+        model_one_sentence=_text(core.get("model_one_sentence")),
+        model_position_advice=(
+            {"no_position": no_position, "has_position": has_position}
+            if no_position or has_position
+            else None
+        ),
+        # Literal in the API schema: anything else must not reach ReportSummary.
+        guardrail_kind=kind if kind in GUARDRAIL_KINDS else None,
+    )
+    return fields
+
+
+def preserve_model_advice(
+    core: Dict[str, Any],
+    *,
+    guardrail_kind: Optional[str],
+    include_position_advice: bool = True,
+) -> None:
+    """Snapshot the model's one_sentence / position_advice before a guardrail rewrites them.
+
+    First write wins, so re-applied guardrails keep the original model wording;
+    guardrail_kind always reflects the latest rewrite.
+    """
+    original_sentence = core.get("one_sentence")
+    if isinstance(original_sentence, str) and original_sentence.strip() and "model_one_sentence" not in core:
+        core["model_one_sentence"] = original_sentence
+    if include_position_advice and "model_position_advice" not in core:
+        position = _mapping(core, "position_advice")
+        no_position = position.get("no_position")
+        has_position = position.get("has_position")
+        if no_position or has_position:
+            # Fresh dict: callers mutate position_advice in place right after this.
+            core["model_position_advice"] = {"no_position": no_position, "has_position": has_position}
+    if guardrail_kind:
+        core["guardrail_kind"] = guardrail_kind
 
 
 def finite_float(value: Any) -> Optional[float]:
@@ -102,6 +156,15 @@ def finite_float(value: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return parsed if isfinite(parsed) else None
+
+
+def format_price(value: float, *, thousands: bool = False) -> str:
+    """至少兩位小數；原值精度更高（ETF 3.852、低價股 0.355）時保留原精度，不四捨五入。"""
+    from decimal import Decimal
+
+    exact = Decimal(repr(float(value)))
+    places = max(2, -exact.as_tuple().exponent)
+    return format(exact, f"{',' if thousands else ''}.{places}f")
 
 
 def derive_change_amount(price: Optional[float], change_pct: Optional[float]) -> Optional[float]:
