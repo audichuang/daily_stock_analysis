@@ -38,7 +38,7 @@ def test_tw_prompt_has_monthly_revenue_row_with_month_and_growth():
     p = _prompt("2330.TW", dict(_GROWTH))
     assert "月營收（2026-09，單月，非年度）" in p
     assert "年增 +54.65%" in p and "月增 -0.57%" in p and "累計年增 +41.11%" in p
-    assert "3350.00 亿新台币" in p  # zh 模板沿用 _format_amount 的中文量級，幣別為新台幣
+    assert "3350.00 億新台幣" in p  # zh-TW 沿用 _format_amount 的中文量級，幣別為新台幣
 
 
 def test_tw_prompt_en_template_uses_english_magnitude():
@@ -147,8 +147,8 @@ def _row(prompt, label):
 
 def test_tw_financial_rows_zh_have_unit_sign_and_basis_labels():
     p = _fr_prompt("2330.TW", dict(_FR))
-    assert "| 營業收入 | 12703.80 亿新台币 | 單季 |" in p
-    assert "| 歸母淨利 | -123.46 亿新台币 | 近四季推算（營收×淨利率） |" in p
+    assert "| 營業收入 | 12703.80 億新台幣 | 單季 |" in p
+    assert "| 歸母淨利 | -123.46 億新台幣 | 近四季推算（營收×淨利率） |" in p
     assert "1270380250000" not in p and "-12345678900" not in p
     # None → N/A、無口徑標籤；ROE 是比率，原樣不格式化
     assert "| 營運現金流 | N/A |  |" in p
@@ -168,7 +168,7 @@ def test_financial_rows_non_numeric_prints_na_and_missing_basis_leaves_note_empt
     p = _fr_prompt("2330.TW", fr)
     assert "| 營業收入 | N/A |  |" in p
     assert "| 歸母淨利 | -5000 新台币 |  |" in p
-    assert "| 營運現金流 | 1.50 亿新台币 |  |" in p
+    assert "| 營運現金流 | 1.50 億新台幣 |  |" in p
     assert "| ROE | N/A |" in p
 
 
@@ -207,9 +207,9 @@ def test_unknown_financial_currency_keeps_iso_code(language, label, values):
 
 
 @pytest.mark.parametrize("currency,expected", [
-    ("CNY", "100.00 亿元"), ("RMB", "100.00 亿元"), ("USD", "100.00 亿美元"),
-    ("HKD", "100.00 亿港元"), ("TWD", "100.00 亿新台币"),
-    ("JPY", "100.00 亿日元"), ("KRW", "100.00 亿韩元"), (None, "100.00 亿港元"),
+    ("CNY", "100.00 億元"), ("RMB", "100.00 億元"), ("USD", "100.00 億美元"),
+    ("HKD", "100.00 億港元"), ("TWD", "100.00 億新台幣"),
+    ("JPY", "100.00 億日元"), ("KRW", "100.00 億韓元"), (None, "100.00 億港元"),
 ])
 def test_supported_financial_currency_format_unchanged(currency, expected):
     fr = {"revenue": 1e10, "currency": currency}

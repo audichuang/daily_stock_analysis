@@ -10,6 +10,7 @@ from src.analysis_context_pack_prompt import CORE_DEGRADED_STATUSES
 from src.market_phase_summary import render_market_phase_summary
 from src.report_language import localize_confidence_level, normalize_report_language
 from src.schemas.decision_scale import record_guardrail_score_adjustment
+from src.utils.zh_s2t import to_traditional
 
 if TYPE_CHECKING:
     from src.analyzer import AnalysisResult
@@ -64,9 +65,26 @@ _IMMEDIATE_ACTION_MARKERS_ZH = (
     "马上卖出",
     "立即减仓",
     "马上减仓",
+    # 繁體與台灣用語：zh-TW 報告的 LLM 文字不會是上面的簡體字
+    "立即買進",
+    "馬上買進",
+    "立即買入",
+    "馬上買入",
+    "立即加碼",
+    "馬上加碼",
+    "立即加倉",
+    "馬上加倉",
+    "立即賣出",
+    "馬上賣出",
+    "立即減碼",
+    "馬上減碼",
+    "立即減倉",
+    "馬上減倉",
 )
 _IMMEDIATE_ACTION_MARKERS_EN = ("buy now", "sell now", "immediate buy", "immediate sell", "add now", "reduce now")
-_NEGATION_PREFIXES_ZH = ("暂不", "不建议", "禁止", "不要", "无需", "避免", "不能", "不可", "不宜", "勿", "不")
+_NEGATION_PREFIXES_ZH = (
+    "暂不", "暫不", "不建议", "不建議", "禁止", "不要", "无需", "無需", "避免", "不能", "不可", "不宜", "勿", "不",
+)
 _NEGATION_PREFIXES_EN = ("do not", "don't", "dont", "not", "no", "avoid", "hold off", "without")
 
 _KO_POSTMARKET_RECAP_PATTERNS = (
@@ -87,6 +105,8 @@ def _recap_patterns_for(language: str) -> tuple[str, ...]:
         return _EN_POSTMARKET_RECAP_PATTERNS
     if language == "ko":
         return _KO_POSTMARKET_RECAP_PATTERNS
+    if language == "zh-TW":
+        return _ZH_POSTMARKET_RECAP_PATTERNS + tuple(to_traditional(item) for item in _ZH_POSTMARKET_RECAP_PATTERNS)
     return _ZH_POSTMARKET_RECAP_PATTERNS
 
 
@@ -111,7 +131,7 @@ def _reason_text(language: str, *, en: str, zh: str, ko: str) -> str:
         return en
     if language == "ko":
         return ko
-    return zh
+    return to_traditional(zh) if language == "zh-TW" else zh
 
 
 def apply_phase_decision_guardrails(
@@ -262,7 +282,8 @@ def _phase_warning_limitations(summary: Optional[Mapping[str, Any]], *, language
         return [f"market phase warning: {item}" for item in warnings]
     if language == "ko":
         return [f"시장 단계 경고: {item}" for item in warnings]
-    return [f"市场阶段提醒：{item}" for item in warnings]
+    prefix = _reason_text(language, en="", zh="市场阶段提醒", ko="")
+    return [f"{prefix}：{item}" for item in warnings]
 
 
 def _merge_limitations(*groups: Any, limit: int = 5) -> List[str]:

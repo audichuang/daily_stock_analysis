@@ -22,6 +22,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 import markdown2
 
+from src.utils.zh_fold import fold_traditional
 from src.utils.sniper_points import find_sniper_points, find_sniper_prices, parse_sniper_value, resolve_sniper_prices
 
 
@@ -651,12 +652,14 @@ def _compact_position(value: object, *, holding: bool) -> str:
     text = _clean_value(value, limit=150)
     if not text:
         return ""
+    # zh-TW 報告寫的是減碼、買進；比對前先折成簡體，比對表只留一份。
+    folded = fold_traditional(text)
     prices = _price_tokens(text)
     if holding and prices:
         stop_match = re.search(r"跌破\s*(\d+(?:\.\d+)?)", text)
         reduce_at = next((price for price in prices if price != (stop_match.group(1) if stop_match else "")), "")
         parts = []
-        if "减仓" in text:
+        if "减仓" in folded or "减码" in folded:
             parts.append(f"反弹至 {reduce_at} 附近减仓" if reduce_at else "反弹减仓")
         if stop_match:
             parts.append(f"跌破 {stop_match.group(1)} 止损")
@@ -666,7 +669,7 @@ def _compact_position(value: object, *, holding: bool) -> str:
         if "等待" in text or "企稳" in text:
             levels = " / ".join(prices[:2])
             return f"等待 {levels} 附近企稳" if levels else "等待右侧企稳信号"
-        if "不" in text and any(term in text for term in ("建仓", "接", "买入")):
+        if "不" in text and any(term in folded for term in ("建仓", "接", "买入", "买进")):
             return "暂不建仓"
     return _compact_text(text, limit=40)
 
@@ -996,7 +999,7 @@ def _stock_data(markdown_text: str, generated_on: date) -> StockPoster:
     score_match = re.search(r"(?:评分|score)\s*[:：]?\s*\*{0,2}(\d{1,3})", markdown_text, re.IGNORECASE)
     core = _section(markdown_text, "核心结论", "core conclusion", "核心判断")
     action_terms = (
-        "买入", "加仓", "持有", "观望", "减仓", "卖出", "回避", "警戒",
+        "买入", "买进", "加仓", "加码", "持有", "續抱", "观望", "减仓", "减码", "卖出", "回避", "警戒", "警報",
         "buy", "add", "hold", "watch", "reduce", "sell", "avoid", "alert",
     )
     action_value = next(
@@ -1010,7 +1013,7 @@ def _stock_data(markdown_text: str, generated_on: date) -> StockPoster:
                     re.IGNORECASE,
                 )
             )
-            if any(term in candidate.lower() for term in action_terms)
+            if any(term in fold_traditional(candidate.lower()) for term in action_terms)
         ),
         "",
     )
@@ -1764,10 +1767,10 @@ def _should_keep_market_fallback(markdown_text: str, data: MarketPoster) -> bool
 
 
 def _tone_for_action(action: str) -> str:
-    normalized = (action or "").lower()
-    if any(term in normalized for term in ("买", "加仓", "buy", "add")):
+    normalized = fold_traditional((action or "").lower())
+    if any(term in normalized for term in ("买", "加仓", "加码", "buy", "add")):
         return "positive"
-    if any(term in normalized for term in ("卖", "减仓", "回避", "sell", "reduce", "avoid")):
+    if any(term in normalized for term in ("卖", "减仓", "减码", "回避", "sell", "reduce", "avoid")):
         return "negative"
     return "primary"
 

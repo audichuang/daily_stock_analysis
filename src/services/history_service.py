@@ -26,6 +26,8 @@ from src.report_language import (
     get_report_labels,
     get_signal_level,
     get_chip_unavailable_reason,
+    is_missing_report_value,
+    report_table_rows,
     is_chip_structure_unavailable,
     localize_bias_status,
     localize_chip_health,
@@ -1310,18 +1312,26 @@ class HistoryService:
                 raw_bias_status = price_data.get('bias_status', 'N/A')
                 bias_status = localize_bias_status(raw_bias_status, report_language)
                 bias_emoji = get_bias_status_emoji(raw_bias_status)
-                report_lines.extend([
-                    f"| {labels['price_metrics_label']} | {labels['current_price_label']} |",
-                    "|---------|------|",
-                    f"| {labels['current_price_label']} | {price_data.get('current_price', 'N/A')} |",
-                    f"| {labels['ma5_label']} | {price_data.get('ma5', 'N/A')} |",
-                    f"| {labels['ma10_label']} | {price_data.get('ma10', 'N/A')} |",
-                    f"| {labels['ma20_label']} | {price_data.get('ma20', 'N/A')} |",
-                    f"| {labels['bias_ma5_label']} | {price_data.get('bias_ma5', 'N/A')}% {bias_emoji}{bias_status} |",
-                    f"| {labels['support_level_label']} | {price_data.get('support_level', 'N/A')} |",
-                    f"| {labels['resistance_level_label']} | {price_data.get('resistance_level', 'N/A')} |",
-                    "",
+                bias_ma5 = price_data.get('bias_ma5')
+                price_rows = report_table_rows([
+                    (labels['current_price_label'], price_data.get('current_price')),
+                    (labels['ma5_label'], price_data.get('ma5')),
+                    (labels['ma10_label'], price_data.get('ma10')),
+                    (labels['ma20_label'], price_data.get('ma20')),
+                    (
+                        labels['bias_ma5_label'],
+                        None if is_missing_report_value(bias_ma5) else f"{bias_ma5}% {bias_emoji}{bias_status}",
+                    ),
+                    (labels['support_level_label'], price_data.get('support_level')),
+                    (labels['resistance_level_label'], price_data.get('resistance_level')),
                 ])
+                if price_rows:
+                    report_lines.extend([
+                        f"| {labels['table_item_label']} | {labels['table_value_label']} |",
+                        "|---------|------|",
+                        *price_rows,
+                        "",
+                    ])
             # 量能分析
             if vol_data:
                 report_lines.extend([
@@ -1369,16 +1379,19 @@ class HistoryService:
             ])
             # 狙击点位
             sniper = battle.get('sniper_points', {})
-            if sniper:
+            sniper_rows = report_table_rows([
+                (f"🎯 {labels['ideal_buy_label']}", self._clean_sniper_value(sniper.get('ideal_buy'))),
+                (f"🔵 {labels['secondary_buy_label']}", self._clean_sniper_value(sniper.get('secondary_buy'))),
+                (f"🛑 {labels['stop_loss_label']}", self._clean_sniper_value(sniper.get('stop_loss'))),
+                (f"🎊 {labels['take_profit_label']}", self._clean_sniper_value(sniper.get('take_profit'))),
+            ]) if sniper else []
+            if sniper_rows:
                 report_lines.extend([
                     f"**📍 {labels['action_points_heading']}**",
                     "",
-                    f"| {labels['action_points_heading']} | {labels['current_price_label']} |",
+                    f"| {labels['table_level_label']} | {labels['table_price_label']} |",
                     "|---------|------|",
-                    f"| 🎯 {labels['ideal_buy_label']} | {self._clean_sniper_value(sniper.get('ideal_buy', 'N/A'))} |",
-                    f"| 🔵 {labels['secondary_buy_label']} | {self._clean_sniper_value(sniper.get('secondary_buy', 'N/A'))} |",
-                    f"| 🛑 {labels['stop_loss_label']} | {self._clean_sniper_value(sniper.get('stop_loss', 'N/A'))} |",
-                    f"| 🎊 {labels['take_profit_label']} | {self._clean_sniper_value(sniper.get('take_profit', 'N/A'))} |",
+                    *sniper_rows,
                     "",
                 ])
             # 仓位策略
@@ -1631,7 +1644,7 @@ class HistoryService:
         lines.extend([
             f"### 📈 {labels['market_snapshot_heading']}",
             "",
-            f"| {labels['price_metrics_label']} | {labels['current_price_label']} |",
+            f"| {labels['table_item_label']} | {labels['table_value_label']} |",
             "|------|------|",
         ])
 

@@ -30,14 +30,15 @@ _ACTION_VALUES = set(get_args(DecisionAction))
 _NON_STOCK_REPORT_TYPES = {"market_review"}
 
 _ACTION_LABELS: Dict[str, Dict[str, str]] = {
-    "buy": {"zh": "买入", "zh-TW": "買入", "en": "Buy", "ko": "매수"},
-    "add": {"zh": "加仓", "zh-TW": "加倉", "en": "Add", "ko": "추가 매수"},
-    "hold": {"zh": "持有", "zh-TW": "持有", "en": "Hold", "ko": "보유"},
-    "reduce": {"zh": "减仓", "zh-TW": "減倉", "en": "Reduce", "ko": "비중축소"},
+    # zh-TW 依 docs/glossary-zh-tw.md；舊報告存的買入、減倉、預警等由 zh 欄折疊後解析。
+    "buy": {"zh": "买入", "zh-TW": "買進", "en": "Buy", "ko": "매수"},
+    "add": {"zh": "加仓", "zh-TW": "加碼", "en": "Add", "ko": "추가 매수"},
+    "hold": {"zh": "持有", "zh-TW": "續抱", "en": "Hold", "ko": "보유"},
+    "reduce": {"zh": "减仓", "zh-TW": "減碼", "en": "Reduce", "ko": "비중축소"},
     "sell": {"zh": "卖出", "zh-TW": "賣出", "en": "Sell", "ko": "매도"},
     "watch": {"zh": "观望", "zh-TW": "觀望", "en": "Watch", "ko": "관망"},
-    "avoid": {"zh": "回避", "zh-TW": "回避", "en": "Avoid", "ko": "회피"},
-    "alert": {"zh": "预警", "zh-TW": "預警", "en": "Alert", "ko": "경고"},
+    "avoid": {"zh": "回避", "zh-TW": "迴避", "en": "Avoid", "ko": "회피"},
+    "alert": {"zh": "预警", "zh-TW": "警報", "en": "Alert", "ko": "경고"},
 }
 
 _EXPLICIT_ALIASES: Dict[str, DecisionAction] = {
@@ -54,6 +55,7 @@ _EXPLICIT_ALIASES: Dict[str, DecisionAction] = {
 # 標籤來源只有既有列舉：八態動作的各語系顯示標籤，與 operation_advice 列舉的強烈買入／賣出。
 _EXTRA_EXACT_LABELS: Dict[str, DecisionAction] = {
     "强烈买入": "buy",
+    "强烈买进": "buy",
     "적극 매수": "buy",
     "强烈卖出": "sell",
     "적극 매도": "sell",
