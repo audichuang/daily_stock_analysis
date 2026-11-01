@@ -108,7 +108,7 @@ _SMC 價位是結構參考，不是買賣訊號；完整分析在盯盤看板的
 2. **設定 Telegram**：`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID` 都要有（兩個只設一個會被設定檢查擋下）。
 3. **路由**：`NOTIFICATION_ALERT_CHANNELS` 留空時，警報送到所有已設定的渠道；只想送 Telegram 就設成 `telegram`。
 4. **警報輪詢要開著**：`AGENT_EVENT_MONITOR_ENABLED=true`（`AGENT_EVENT_MONITOR_INTERVAL_MINUTES` 預設 5 分鐘），再選一條路跑：
-   - **只跑監控（NAS 用這條）**：加上 `AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE=true`。API 程序啟動獨立執行緒（`alert_worker.start_alert_monitor_worker`），不依賴 `SCHEDULE_ENABLED`、不註冊每日分析，所以不會和 Mac 18:00 的每日報告重複。即時價規則只在該市場開盤時段評估（`is_market_polling_window` 且不提前放行），盤前、收盤後與假日不抓報價、不寫紀錄；觸發時還要確認報價屬於今天這一場（`quote_in_current_session`），前一場的價格不通知、不進冷卻。yfinance 報價不帶時間、無從驗證，開盤 30 分鐘後才採信，所以 Shioaji 退回 yfinance 時開盤初段的警報會晚到。程序啟動時決定，改值要重啟。
+   - **只跑監控（NAS 用這條）**：加上 `AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE=true`。API 程序啟動獨立執行緒（`alert_worker.start_alert_monitor_worker`），不依賴 `SCHEDULE_ENABLED`、不註冊每日分析，所以不會和 Mac 18:00 的每日報告重複。即時價規則只在該市場開盤時段評估（`is_market_polling_window` 且不提前放行），盤前、收盤後與假日不抓報價、不寫紀錄；觸發時還要確認報價屬於今天這一場（`quote_in_current_session`），前一場的價格不通知、不進冷卻。報價不帶時間時（yfinance，含 Shioaji 退回 yfinance），只在將要觸發那一刻多查一次最後一筆分鐘成交的時間（`YfinanceFetcher.get_last_trade_time`，一般報價路徑與看板不經過）；日線備援則比對該列日期。查不到或不是今天就不通知，計入 `last_stats.stale_quote`，開盤過多久都一樣。程序啟動時決定，改值要重啟。
    - **跟著排程器跑**：`SCHEDULE_ENABLED=true` 或 `--schedule`，代價是連帶跑每日分析。這條路維持全天評估。
    - 兩者同時開時由獨立執行緒負責，排程器不註冊監控，不會重複推播。
    - 確認有在跑：`GET /api/v1/alerts/monitor/status` 的 `running`（看實際執行緒或排程器，不是開關值）、`last_run_at`、`channels`；只開 `AGENT_EVENT_MONITOR_ENABLED` 而兩條路都沒開時，`reason` 是 `schedule_not_running`。

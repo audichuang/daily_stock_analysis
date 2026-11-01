@@ -10,7 +10,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from src.agent.events import (
@@ -109,6 +109,12 @@ def run_recorded_cycle(worker: Any) -> Dict[str, int]:
     return stats
 
 
+def _yfinance_last_trade_time(stock_code: str) -> Optional[datetime]:
+    from data_provider.yfinance_fetcher import YfinanceFetcher
+
+    return YfinanceFetcher().get_last_trade_time(stock_code)
+
+
 def _reload_monitor_config() -> Any:
     from main import _reload_runtime_config
 
@@ -153,6 +159,7 @@ class AlertWorker:
         now_provider: Optional[Callable[[], float]] = None,
         fingerprint_ttl_seconds: int = ALERT_WORKER_FINGERPRINT_TTL_SECONDS,
         realtime_session_gate: bool = False,
+        last_trade_time_provider: Optional[Callable[[str], Optional[datetime]]] = None,
     ) -> None:
         self.config_provider = config_provider or self._default_config_provider
         self.service = service or AlertService()
@@ -165,6 +172,7 @@ class AlertWorker:
         self._analysis_visibility_cache: Dict[str, Optional[Dict[str, Any]]] = {}
         # 獨立監控執行緒全天輪詢：收盤後的「即時價」其實是收盤價，週末也會照樣觸發並推播。
         self.realtime_session_gate = realtime_session_gate
+        self.last_trade_time_provider = last_trade_time_provider or _yfinance_last_trade_time
 
     @staticmethod
     def _default_config_provider():
@@ -190,15 +198,17 @@ class AlertWorker:
 
     def _quote_is_current(self, rule: Any, result: Dict[str, Any], now: datetime) -> bool:
         diagnostics = self._diagnostics_payload(result.get("diagnostics"))
-        quote_time: Optional[datetime] = None
-        raw_time = diagnostics.get("quote_timestamp")
-        if raw_time:
-            try:
-                quote_time = datetime.fromisoformat(str(raw_time))
-            except ValueError:
-                # 有給時間卻解析不了，當成場次不明，不退回「沒帶時間」的寬限規則
-                return False
         market = get_market_for_stock(normalize_stock_code(rule.stock_code))
+        quote_time: Any = None
+        try:
+            if diagnostics.get("quote_timestamp"):
+                quote_time = datetime.fromisoformat(str(diagnostics["quote_timestamp"]))
+            elif diagnostics.get("quote_trade_date"):
+                quote_time = date.fromisoformat(str(diagnostics["quote_trade_date"]))
+            else:
+                quote_time = self.last_trade_time_provider(rule.stock_code)
+        except ValueError:
+            return False
         return quote_in_current_session(market, quote_time, current_time=now)
 
     def run_once(self) -> Dict[str, int]:

@@ -88,6 +88,8 @@ const AlertsPage: React.FC = () => {
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [busyRule, setBusyRule] = useState<AlertRuleBusyState | null>(null);
   const [testResults, setTestResults] = useState<Record<number, AlertRuleTestResponse>>({});
+  // 每條規則的修改次數：編輯前發出、編輯後才回來的試算是舊條件的結果，不能套用。
+  const ruleRevisionsRef = useRef<Record<number, number>>({});
   const [mobileTab, setMobileTab] = useState<MobileTab>('rules');
 
   const reloadRulesFromFirstPage = useCallback(() => {
@@ -232,6 +234,12 @@ const AlertsPage: React.FC = () => {
           ? { name: payload.name, severity: payload.severity, cooldownSeconds: payload.cooldownSeconds }
           : payload;
         saved = await alertsApi.updateRule(editing, update);
+        ruleRevisionsRef.current[editing] = (ruleRevisionsRef.current[editing] ?? 0) + 1;
+        setTestResults((current) => {
+          const next = { ...current };
+          delete next[editing];
+          return next;
+        });
         setSaveMessage(formatUiText(text.updated, { name: saved.name }));
       } else {
         // 沒填名稱時用看得懂的句子，否則後端預設是英文的機器字串（2330.TW price above 1.0）。
@@ -425,7 +433,9 @@ const AlertsPage: React.FC = () => {
               refreshRules();
             })}
             onTest={(rule) => void runBusy(rule, 'test', async () => {
+              const revision = ruleRevisionsRef.current[rule.id] ?? 0;
               const result = await alertsApi.testRule(rule.id);
+              if ((ruleRevisionsRef.current[rule.id] ?? 0) !== revision) return;
               setTestResults((current) => ({ ...current, [rule.id]: result }));
             })}
             onDismissTest={(rule) => setTestResults((current) => {

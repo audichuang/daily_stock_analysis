@@ -972,6 +972,21 @@ class YfinanceFetcher(BaseFetcher):
             logger.warning(f"[Yfinance] 获取美股指数 {user_code} 实时行情失败: {e}")
             return None
 
+    def get_last_trade_time(self, stock_code: str) -> Optional[datetime]:
+        """最後一筆分鐘成交的時間；取不到回 None。
+
+        fast_info 不帶成交時間。這裡多一次網路呼叫，只給警報在將要觸發時驗證場次用，一般報價路徑不經過。
+        """
+        import yfinance as yf
+
+        try:
+            hist = yf.Ticker(self._convert_stock_code(stock_code)).history(period="1d", interval="1m")
+            closes = hist["Close"].dropna()
+            return None if closes.empty else closes.index[-1].to_pydatetime()
+        except Exception as exc:
+            logger.warning("[Yfinance] %s 取最後成交時間失敗: %s", stock_code, type(exc).__name__)
+            return None
+
     def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
         """
         获取美股、港股、日韩台股票或美股指数实时行情数据
@@ -1012,6 +1027,7 @@ class YfinanceFetcher(BaseFetcher):
             logger.debug(f"[Yfinance] 获取 {symbol} 实时行情")
 
             ticker = yf.Ticker(symbol)
+            quote_trade_date = None
 
             # 尝试获取 fast_info（更快，但字段较少）
             try:
@@ -1040,6 +1056,8 @@ class YfinanceFetcher(BaseFetcher):
 
                 today = hist.iloc[-1]
                 prev = hist.iloc[-2] if len(hist) > 1 else today
+                # 今天還沒資料時最後一列是前一場；日期要留著，警報才分得出來
+                quote_trade_date = hist.index[-1].date().isoformat()
 
                 price = float(today['Close'])
                 prev_close = float(prev['Close'])
@@ -1128,6 +1146,7 @@ class YfinanceFetcher(BaseFetcher):
                 pb_ratio=pb_ratio,
                 total_mv=market_cap,
                 circ_mv=None,
+                quote_trade_date=quote_trade_date,
             )
 
             logger.info(f"[Yfinance] 获取 {symbol} 实时行情成功: 价格={price}")

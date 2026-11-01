@@ -371,6 +371,9 @@ class AlertService:
         if provider_time:
             # 監控執行緒用它確認報價屬於今天這一場
             diagnostics["quote_timestamp"] = str(provider_time)
+        trade_date = getattr(quote, "quote_trade_date", None)
+        if trade_date:
+            diagnostics["quote_trade_date"] = str(trade_date)
         if diagnostics:
             result["diagnostics"] = diagnostics
         return result

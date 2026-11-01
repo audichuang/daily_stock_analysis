@@ -126,6 +126,7 @@ class UnifiedRealtimeQuote:
     # === 数据质量元数据（由 DataFetcherManager 统一补齐）===
     fetched_at: Optional[str] = None             # 本系统获取时间（ISO 8601 datetime）
     provider_timestamp: Optional[str] = None     # Provider 真实行情时间（ISO 8601 datetime）
+    quote_trade_date: Optional[str] = None       # 日线备援取到的那一列日期（ISO 日期）；警报验证场次用，不进 to_dict、不影响看板的 is_stale
     is_stale: Optional[bool] = None              # 超过最小 TTL 阈值时为 True；收盘后属于最近已收盘场次的报价不算过期
     stale_seconds: Optional[int] = None          # provider_timestamp 距 fetched_at 的秒数
     fallback_from: Optional[str] = None          # 整源 fallback 的失败首选源 token

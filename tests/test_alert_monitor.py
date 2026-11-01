@@ -426,6 +426,7 @@ class MonitorThreadEndToEndTests(unittest.TestCase):
             decision_signal_service=MagicMock(),
             notifier=SimpleNamespace(send_with_results=fake_send),
             realtime_session_gate=True,
+            last_trade_time_provider=lambda code: datetime.now(TAIPEI),
         )
         quote = SimpleNamespace(price=1010.0, source=SimpleNamespace(value="yfinance"))
         handle = AlertMonitorThread(config_provider=lambda: config, worker=worker)
@@ -474,13 +475,13 @@ class PremarketRegressionTests(unittest.TestCase):
     def _at(self, hour: int, minute: int) -> datetime:
         return datetime(self.session.year, self.session.month, self.session.day, hour, minute, tzinfo=TAIPEI)
 
-    def _harness(self):
+    def _harness(self, target: str = "2330.TW", last_trade_time=None):
         from src.notification import ChannelAttemptResult
         from src.services.alert_service import AlertService
 
         service = AlertService()
         rule = service.create_rule({
-            "name": "台積電站上", "target_scope": "single_symbol", "target": "2330.TW",
+            "name": "站上", "target_scope": "single_symbol", "target": target,
             "alert_type": "price_cross", "parameters": {"direction": "above", "price": 1000},
             "severity": "warning", "enabled": True,
         })
@@ -494,14 +495,16 @@ class PremarketRegressionTests(unittest.TestCase):
         worker = AlertWorker(
             config_provider=lambda: config, service=service, decision_signal_service=MagicMock(),
             notifier=notifier, now_provider=lambda: self.clock.timestamp(), realtime_session_gate=True,
+            last_trade_time_provider=last_trade_time or MagicMock(side_effect=AssertionError("不該另查成交時間")),
         )
         return worker, service, notifier, rule
 
-    def _run(self, worker, when: datetime, quote_time):
+    def _run(self, worker, when: datetime, quote_time, *, source="shioaji", trade_date=None, price=1010.0):
         self.clock = when
         quote = SimpleNamespace(
-            price=1010.0, source=SimpleNamespace(value="shioaji"),
+            price=price, source=SimpleNamespace(value=source),
             provider_timestamp=quote_time.isoformat() if quote_time else None,
+            quote_trade_date=trade_date,
         )
         fetch = AsyncMock(return_value=quote)
         with patch("src.agent.events.EventMonitor._get_realtime_quote", new=fetch):
@@ -528,13 +531,62 @@ class PremarketRegressionTests(unittest.TestCase):
         self.assertEqual(stats["cooldown_suppressed"], 0)
         notifier.send_with_results.assert_called_once()
 
-    def test_quote_without_time_waits_out_the_delay_window(self) -> None:
-        worker, _, notifier, _ = self._harness()
-        stats, _ = self._run(worker, self._at(9, 6), None)
+    def test_fallback_old_price_never_passes_on_elapsed_time_then_today_notifies(self) -> None:
+        """Shioaji 退回 yfinance：開盤超過 30 分鐘、最後成交仍是前一場，不通知也不進冷卻。"""
+        bars = MagicMock(return_value=self._at(13, 30) - timedelta(days=3))
+        worker, service, notifier, rule = self._harness(last_trade_time=bars)
+        for when in (self._at(9, 31), self._at(12, 0)):
+            stats, _ = self._run(worker, when, None, source="fallback")
+            self.assertEqual(stats["stale_quote"], 1)
+        notifier.send_with_results.assert_not_called()
+        self.assertEqual(service.list_triggers(rule_id=rule["id"])["summary"]["triggered"], 0)
+        self.assertFalse(service.get_rule(rule["id"])["cooldown_active"])
+
+        bars.return_value = self._at(12, 4)
+        stats, _ = self._run(worker, self._at(12, 5), None, source="fallback")
+        self.assertEqual(stats["notified"], 1)
+        self.assertEqual(stats["cooldown_suppressed"], 0)
+        bars.assert_called_with("2330.TW")
+
+    def test_unknown_last_trade_time_does_not_notify(self) -> None:
+        worker, _, notifier, _ = self._harness(last_trade_time=MagicMock(return_value=None))
+        stats, _ = self._run(worker, self._at(11, 0), None, source="fallback")
         self.assertEqual(stats["stale_quote"], 1)
         notifier.send_with_results.assert_not_called()
-        stats, _ = self._run(worker, self._at(9, 31), None)
+
+    def test_history_fallback_row_date_decides_without_extra_call(self) -> None:
+        worker, _, notifier, _ = self._harness()
+        previous = (self._at(10, 0) - timedelta(days=3)).date().isoformat()
+        stats, _ = self._run(worker, self._at(10, 0), None, source="fallback", trade_date=previous)
+        self.assertEqual(stats["stale_quote"], 1)
+        notifier.send_with_results.assert_not_called()
+        stats, _ = self._run(worker, self._at(10, 5), None, source="fallback", trade_date=self.session.isoformat())
         self.assertEqual(stats["notified"], 1)
+
+    def test_untriggered_quote_makes_no_extra_call(self) -> None:
+        bars = MagicMock(return_value=None)
+        worker, _, _, _ = self._harness(last_trade_time=bars)
+        self._run(worker, self._at(10, 0), None, source="fallback", price=900.0)
+        bars.assert_not_called()
+
+    def test_us_yfinance_today_notifies_and_prior_close_does_not(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        from src.core.trading_calendar import get_next_trading_date
+
+        new_york = ZoneInfo("America/New_York")
+        session = get_next_trading_date("us", datetime.now(new_york).date())
+        at = lambda hour, minute: datetime(session.year, session.month, session.day, hour, minute, tzinfo=new_york)  # noqa: E731
+        bars = MagicMock(return_value=at(16, 0) - timedelta(days=3))
+        worker, _, notifier, _ = self._harness(target="AAPL", last_trade_time=bars)
+        stats, _ = self._run(worker, at(10, 31), None, source="yfinance")
+        self.assertEqual(stats["stale_quote"], 1)
+        notifier.send_with_results.assert_not_called()
+
+        bars.return_value = at(10, 35)
+        stats, _ = self._run(worker, at(10, 36), None, source="yfinance")
+        self.assertEqual(stats["notified"], 1)
+        self.assertIn("yfinance", notifier.send_with_results.call_args.args[0])
 
     def test_unparseable_quote_time_is_not_treated_as_missing(self) -> None:
         worker, _, notifier, _ = self._harness()
@@ -550,6 +602,63 @@ class PremarketRegressionTests(unittest.TestCase):
         stats, _ = self._run(worker, self._at(13, 35), self._at(13, 30))
         self.assertEqual(stats["notified"], 1)
         notifier.send_with_results.assert_called_once()
+
+
+class YfinanceSessionSourceTests(unittest.TestCase):
+    def _bars(self, *days: str):
+        import pandas as pd
+
+        index = pd.DatetimeIndex(days, tz="Asia/Taipei")
+        return pd.DataFrame(
+            {"Open": 1.0, "High": 1.0, "Low": 1.0, "Close": 1.0, "Volume": 1}, index=index,
+        )
+
+    def _fetcher_with(self, ticker):
+        fake = SimpleNamespace(Ticker=lambda symbol: ticker)
+        return patch.dict("sys.modules", {"yfinance": fake})
+
+    def test_history_fallback_keeps_last_row_date_outside_to_dict(self) -> None:
+        from data_provider.yfinance_fetcher import YfinanceFetcher
+
+        ticker = SimpleNamespace(fast_info=None, history=lambda period: self._bars("2026-10-29", "2026-10-30"))
+        with self._fetcher_with(ticker):
+            quote = YfinanceFetcher().get_realtime_quote("2330.TW")
+        self.assertEqual(quote.quote_trade_date, "2026-10-30")
+        self.assertIsNone(quote.provider_timestamp)
+        self.assertNotIn("quote_trade_date", quote.to_dict())
+
+    def test_fast_info_path_makes_no_history_call(self) -> None:
+        from data_provider.yfinance_fetcher import YfinanceFetcher
+
+        history = MagicMock()
+        info = SimpleNamespace(last_price=10.0, previous_close=9.0, open=9.5, day_high=10.0, day_low=9.0, last_volume=1, market_cap=1)
+        with self._fetcher_with(SimpleNamespace(fast_info=info, history=history)):
+            quote = YfinanceFetcher().get_realtime_quote("2330.TW")
+        self.assertEqual(quote.price, 10.0)
+        self.assertIsNone(quote.quote_trade_date)
+        history.assert_not_called()
+
+    def test_last_trade_time_uses_last_real_bar(self) -> None:
+        import math
+
+        from data_provider.yfinance_fetcher import YfinanceFetcher
+
+        bars = self._bars("2026-10-30 13:29", "2026-10-30 13:30")
+        bars.loc[bars.index[-1], "Close"] = math.nan
+        with self._fetcher_with(SimpleNamespace(history=lambda period, interval: bars)):
+            result = YfinanceFetcher().get_last_trade_time("2330.TW")
+        self.assertEqual((result.hour, result.minute), (13, 29))
+
+    def test_last_trade_time_is_none_when_unavailable(self) -> None:
+        from data_provider.yfinance_fetcher import YfinanceFetcher
+
+        def boom(period, interval):
+            raise RuntimeError("down")
+
+        with self._fetcher_with(SimpleNamespace(history=boom)):
+            self.assertIsNone(YfinanceFetcher().get_last_trade_time("2330.TW"))
+        with self._fetcher_with(SimpleNamespace(history=lambda period, interval: self._bars())):
+            self.assertIsNone(YfinanceFetcher().get_last_trade_time("2330.TW"))
 
 
 class ChannelTests(unittest.TestCase):

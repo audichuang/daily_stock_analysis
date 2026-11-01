@@ -226,6 +226,71 @@ describe('AlertsPage', () => {
     expect(screen.getByText(/只試算，不會送出通知/)).toBeInTheDocument();
   });
 
+  async function dryRun() {
+    fireEvent.click(await screen.findByRole('button', { name: 'rule-one 的更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '試算目前條件' }));
+  }
+
+  async function saveEdit() {
+    fireEvent.click(screen.getByRole('button', { name: 'rule-one 的更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '編輯' }));
+    fireEvent.change(await screen.findByLabelText('價格閾值'), { target: { value: '2000' } });
+    fireEvent.click(screen.getByRole('button', { name: '儲存' }));
+  }
+
+  it('clears the dry run of an edited rule after saving', async () => {
+    api.testRule.mockResolvedValue({ ruleId: 1, status: 'triggered', triggered: true, observedValue: 1200, message: 'm' });
+    renderPage();
+    await dryRun();
+    expect(await screen.findByText('目前條件已達成')).toBeInTheDocument();
+    await saveEdit();
+    await waitFor(() => expect(api.updateRule).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText('目前條件已達成')).not.toBeInTheDocument());
+  });
+
+  it('keeps the dry run when saving fails, and of other rules when saving succeeds', async () => {
+    const other = { ...rule, id: 2, name: 'rule-two', target: 'AAPL' };
+    api.listRules.mockResolvedValue({ items: [rule, other], total: 2, page: 1, pageSize: 20 });
+    api.testRule.mockResolvedValue({ ruleId: 2, status: 'triggered', triggered: true, observedValue: 1200, message: 'm' });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'rule-two 的更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '試算目前條件' }));
+    expect(await screen.findByText('目前條件已達成')).toBeInTheDocument();
+    await saveEdit();
+    await waitFor(() => expect(api.updateRule).toHaveBeenCalledWith(1, expect.anything()));
+    await waitFor(() => expect(screen.queryByLabelText('價格閾值')).not.toBeInTheDocument());
+    expect(screen.getByText('目前條件已達成')).toBeInTheDocument();
+
+    api.updateRule.mockRejectedValueOnce({ parsedError });
+    fireEvent.click(screen.getByRole('button', { name: 'rule-two 的更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '編輯' }));
+    fireEvent.click(await screen.findByRole('button', { name: '儲存' }));
+    expect(await screen.findByText('載入失敗')).toBeInTheDocument();
+    expect(screen.getByText('目前條件已達成')).toBeInTheDocument();
+  });
+
+  it('rejects a dry run sent before an edit that returns after it', async () => {
+    const pending = deferred<unknown>();
+    api.testRule.mockReturnValueOnce(pending.promise);
+    renderPage();
+    // 卡片的選單在試算進行中會停用，所以先開抽屜，再讓試算在儲存前發出
+    fireEvent.click(await screen.findByRole('button', { name: 'rule-one 的更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '編輯' }));
+    fireEvent.change(await screen.findByLabelText('價格閾值'), { target: { value: '2000' } });
+    await dryRun();
+    fireEvent.click(screen.getByRole('button', { name: '儲存' }));
+    await waitFor(() => expect(api.updateRule).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByLabelText('價格閾值')).not.toBeInTheDocument());
+    await act(async () => {
+      pending.resolve({ ruleId: 1, status: 'triggered', triggered: true, observedValue: 1200, message: 'm' });
+    });
+    expect(screen.queryByText('目前條件已達成')).not.toBeInTheDocument();
+
+    api.testRule.mockResolvedValueOnce({ ruleId: 1, status: 'triggered', triggered: true, observedValue: 1200, message: 'm' });
+    await dryRun();
+    expect(await screen.findByText('目前條件已達成')).toBeInTheDocument();
+  });
+
   it('appends on load more and resets to page one after a mutation', async () => {
     const second = { ...rule, id: 2, name: 'rule-two', target: 'AAPL' };
     api.listRules.mockImplementation(async (query: { page: number }) => (
