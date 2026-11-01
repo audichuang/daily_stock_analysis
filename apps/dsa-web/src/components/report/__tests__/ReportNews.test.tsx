@@ -14,7 +14,45 @@ describe('ReportNews', () => {
     vi.clearAllMocks();
   });
 
-  it('renders news items and refreshes with preserved subpanel styling', async () => {
+  it('shows three single-line rows by default, each row a link with source and date', async () => {
+    vi.mocked(historyApi.getNews).mockResolvedValue({
+      total: 4,
+      items: [1, 2, 3, 4].map((index) => ({
+        title: `**標題${index}**`,
+        snippet: '摘要不應出現',
+        url: `https://example.com/${index}`,
+        source: '來源',
+        publishedDate: '2026-10-30',
+      })),
+    });
+
+    render(<ReportNews recordId={1} language="zh-TW" />);
+
+    const first = await screen.findByRole('link', { name: /標題1/ });
+    expect(first).toHaveAttribute('href', 'https://example.com/1');
+    expect(first).toHaveTextContent('來源 · 2026-10-30');
+    // Markdown 記號要清掉、摘要不再佔列。
+    expect(screen.queryByText(/\*\*/)).not.toBeInTheDocument();
+    expect(screen.queryByText('摘要不應出現')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('link')).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole('button', { name: '顯示全部 4 則' }));
+    expect(screen.getAllByRole('link')).toHaveLength(4);
+  });
+
+  it('does not turn a non-http url into a link', async () => {
+    vi.mocked(historyApi.getNews).mockResolvedValue({
+      total: 1,
+      items: [{ title: '可疑來源', snippet: '', url: 'javascript:alert(1)' }],
+    });
+
+    render(<ReportNews recordId={1} />);
+
+    expect(await screen.findByText('可疑來源')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('renders news items and refreshes', async () => {
     vi.mocked(historyApi.getNews).mockResolvedValue({
       total: 1,
       items: [
@@ -29,14 +67,10 @@ describe('ReportNews', () => {
       ],
     });
 
-    const { container } = render(<ReportNews recordId={1} />);
+    render(<ReportNews recordId={1} />);
 
     expect(await screen.findByText('茅台发布最新经营数据')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '跳转' })).toHaveAttribute('href', 'https://example.com/news');
-    expect(screen.getByText('相关资讯/后续检索')).toBeVisible();
-    expect(screen.getByText('来源：报告页补充资讯；是否用于分析以输入数据块为准。')).toBeVisible();
-    expect(container.querySelector('.home-panel-card')).toBeTruthy();
-    expect(container.querySelector('.home-subpanel')).toBeTruthy();
+    expect(screen.getByRole('link', { name: /茅台发布最新经营数据/ })).toHaveAttribute('href', 'https://example.com/news');
 
     fireEvent.click(screen.getByRole('button', { name: '刷新' }));
 
@@ -67,7 +101,6 @@ describe('ReportNews', () => {
 
     expect(await screen.findByText('No related news')).toBeInTheDocument();
     expect(screen.getByText('Refresh later to check for the latest updates.')).toBeInTheDocument();
-    expect(screen.getByText('Related news / follow-up retrieval')).toBeVisible();
   });
 
   it('renders the error state and supports retry', async () => {

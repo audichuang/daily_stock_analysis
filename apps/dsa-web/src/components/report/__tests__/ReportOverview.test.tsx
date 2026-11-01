@@ -1,5 +1,6 @@
-import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { UiLanguageProvider } from '../../../contexts/UiLanguageContext';
 import { ReportOverview } from '../ReportOverview';
 
 const baseMeta = {
@@ -44,8 +45,8 @@ describe('ReportOverview', () => {
       />,
     );
 
-    expect(screen.getByLabelText('市场阶段: CN · 盘中')).toBeInTheDocument();
-    expect(screen.getByText('市场阶段: CN · 盘中')).toBeVisible();
+    expect(screen.getByLabelText('CN · 盘中')).toBeInTheDocument();
+    expect(screen.getByText('CN · 盘中')).toBeVisible();
     expect(screen.getByLabelText('日线未完成')).toBeInTheDocument();
   });
 
@@ -75,7 +76,7 @@ describe('ReportOverview', () => {
       />,
     );
 
-    expect(screen.getByLabelText('Market phase: US · Post-market')).toBeInTheDocument();
+    expect(screen.getByLabelText('US · Post-market')).toBeInTheDocument();
     expect(screen.getByLabelText('Partial bar')).toBeInTheDocument();
   });
 
@@ -104,14 +105,14 @@ describe('ReportOverview', () => {
       />,
     );
 
-    expect(screen.getByText('市场阶段: 阶段未知')).toBeVisible();
+    expect(screen.getByText('阶段未知')).toBeVisible();
     expect(screen.queryByText('日线未完成')).not.toBeInTheDocument();
   });
 
   it('does not render a market phase placeholder for legacy reports', () => {
     render(<ReportOverview meta={baseMeta} summary={baseSummary} />);
 
-    expect(screen.queryByText(/市场阶段/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/阶段/)).not.toBeInTheDocument();
     expect(screen.queryByText('日线未完成')).not.toBeInTheDocument();
   });
 
@@ -144,7 +145,7 @@ describe('ReportOverview', () => {
     expect(screen.getByText('+2.31%')).toBeInTheDocument();
     expect(screen.getByText('+4.56%')).toBeInTheDocument();
     expect(screen.getByText('领跌')).toBeInTheDocument();
-    expect(screen.getByText('-1.20%')).toBeInTheDocument();
+    expect(screen.getByText('\u22121.20%')).toBeInTheDocument();
     expect(screen.queryByText('中性')).not.toBeInTheDocument();
   });
 
@@ -170,7 +171,7 @@ describe('ReportOverview', () => {
     expect(screen.getByText('白酒')).toBeInTheDocument();
     expect(screen.getByText('关联板块')).toBeInTheDocument();
     expect(screen.getByText('领跌')).toBeInTheDocument();
-    expect(screen.getByText('-3.20%')).toBeInTheDocument();
+    expect(screen.getByText('\u22123.20%')).toBeInTheDocument();
     expect(screen.queryByText('+2.31%')).not.toBeInTheDocument();
   });
 
@@ -321,7 +322,7 @@ describe('ReportOverview', () => {
     expect(screen.getByText('关联板块')).toBeInTheDocument();
     expect(screen.getByText('白酒')).toBeInTheDocument();
     expect(screen.getByText('领跌')).toBeInTheDocument();
-    expect(screen.getByText('-2.50%')).toBeInTheDocument();
+    expect(screen.getByText('\u22122.50%')).toBeInTheDocument();
   });
 
   it('hides the stock-only watchlist card for index reports', () => {
@@ -338,7 +339,6 @@ describe('ReportOverview', () => {
       />,
     );
 
-    expect(screen.queryByText('自选')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /自选/ })).not.toBeInTheDocument();
   });
 
@@ -356,7 +356,6 @@ describe('ReportOverview', () => {
       />,
     );
 
-    expect(screen.getByText('自选')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '加入自选' })).toBeInTheDocument();
   });
 
@@ -374,6 +373,157 @@ describe('ReportOverview', () => {
       />,
     );
 
-    expect(screen.getByText('自选')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '加入自选' })).toBeInTheDocument();
+  });
+});
+
+describe('ReportOverview conclusion', () => {
+  afterEach(() => {
+    window.localStorage.removeItem('dsa.uiLanguage');
+  });
+
+  const positionAdvice = { noPosition: '空手先等', hasPosition: '持股守停損' };
+
+  it('shows the glossary word for an old report stored as 減倉, not the stored label', () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'zh-TW');
+    render(
+      <UiLanguageProvider>
+        <ReportOverview meta={baseMeta} summary={{ ...baseSummary, action: 'reduce', actionLabel: '減倉' }} />
+      </UiLanguageProvider>,
+    );
+
+    expect(screen.getByTestId('report-action')).toHaveTextContent('減碼');
+    expect(screen.queryByText('減倉')).not.toBeInTheDocument();
+  });
+
+  it('maps a stored label when the enum is absent', () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'zh-TW');
+    render(
+      <UiLanguageProvider>
+        <ReportOverview meta={baseMeta} summary={{ ...baseSummary, action: null, actionLabel: '減倉' }} />
+      </UiLanguageProvider>,
+    );
+
+    expect(screen.getByTestId('report-action')).toHaveTextContent('減碼');
+  });
+
+  it('prefers the one-sentence conclusion and keeps the longer summary collapsed', () => {
+    render(<ReportOverview meta={baseMeta} summary={{ ...baseSummary, oneSentence: '一句話結論' }} />);
+
+    expect(screen.getByText('一句話結論')).toBeVisible();
+    expect(screen.getByText('趋势维持强势')).not.toBeVisible();
+  });
+
+  it('shows time sensitivity, confidence, score and comparison with the previous report', () => {
+    render(
+      <ReportOverview
+        meta={{ ...baseMeta, reportLanguage: 'zh-TW', previousReport: { action: 'hold', score: 60, createdAt: '2026-10-28T08:00:00', stopLoss: 90 } }}
+        summary={{ ...baseSummary, action: 'watch', sentimentScore: 45, timeSensitivity: '今日有效', confidenceLevel: '中' }}
+      />,
+    );
+
+    expect(screen.getByTestId('report-time-sensitivity')).toHaveTextContent('今日有效');
+    expect(screen.getByText('中')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: '模型評分 45' })).toBeInTheDocument();
+    const comparison = screen.getByTestId('report-comparison');
+    expect(comparison).toHaveTextContent('10/28');
+    expect(comparison).toHaveTextContent('模型評分 60 → 45');
+  });
+
+  it('clamps the score marker but prints the raw score', () => {
+    render(<ReportOverview meta={baseMeta} summary={{ ...baseSummary, sentimentScore: 130 }} />);
+
+    expect(screen.getByTestId('score-bar-marker')).toHaveStyle({ left: '100%' });
+    expect(screen.getByTestId('score-bar')).toHaveTextContent('130');
+  });
+
+  it('no longer renders the fear and greed gauge', () => {
+    render(<ReportOverview meta={baseMeta} summary={baseSummary} />);
+
+    expect(screen.queryByText('市场情绪')).not.toBeInTheDocument();
+    expect(screen.queryByText('恐惧贪婪指数')).not.toBeInTheDocument();
+  });
+
+  it('labels the price with its session date and close or intraday', () => {
+    const { rerender } = render(
+      <ReportOverview
+        meta={{ ...baseMeta, reportLanguage: 'zh-TW', currentPrice: 100, changePct: -1.5, changeAmount: -1.52, priceDate: '2026-10-30' }}
+        summary={baseSummary}
+      />,
+    );
+
+    const price = screen.getByTestId('report-price');
+    expect(price).toHaveTextContent('10/30 收盤');
+    expect(price).toHaveTextContent('\u22121.52');
+    expect(price).toHaveTextContent('\u22121.50%');
+
+    rerender(
+      <ReportOverview
+        meta={{
+          ...baseMeta,
+          reportLanguage: 'zh-TW',
+          currentPrice: 100,
+          priceDate: '2026-10-30',
+          marketPhaseSummary: { phase: 'intraday', warnings: [] },
+        }}
+        summary={baseSummary}
+      />,
+    );
+    expect(screen.getByTestId('report-price')).toHaveTextContent('10/30 盤中');
+  });
+
+  it('pins the holding column only when held is true', () => {
+    render(<ReportOverview meta={{ ...baseMeta, held: true }} summary={{ ...baseSummary, positionAdvice }} />);
+
+    const hasPosition = screen.getByTestId('advice-has-position');
+    const noPosition = screen.getByTestId('advice-no-position');
+    expect(hasPosition).toHaveAttribute('data-pinned', 'true');
+    expect(hasPosition.compareDocumentPosition(noPosition) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it.each([null, false, undefined])('does not pin either column when held is %s', (held) => {
+    render(<ReportOverview meta={{ ...baseMeta, held }} summary={{ ...baseSummary, positionAdvice }} />);
+
+    const hasPosition = screen.getByTestId('advice-has-position');
+    const noPosition = screen.getByTestId('advice-no-position');
+    expect(hasPosition).toHaveAttribute('data-pinned', 'false');
+    expect(noPosition).toHaveAttribute('data-pinned', 'false');
+    expect(noPosition.compareDocumentPosition(hasPosition) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('flags guardrail reports with their reason', () => {
+    render(
+      <ReportOverview
+        meta={{ ...baseMeta, reportLanguage: 'zh-TW' }}
+        summary={{ ...baseSummary, guardrailApplied: true, guardrailReason: '重大波動沒有新聞' }}
+      />,
+    );
+
+    expect(screen.getByTestId('report-guardrail')).toHaveTextContent('系統護欄調整');
+    expect(screen.getByTestId('report-guardrail')).toHaveTextContent('重大波動沒有新聞');
+  });
+
+  it('does not flag when the guardrail was not applied', () => {
+    render(<ReportOverview meta={baseMeta} summary={{ ...baseSummary, guardrailApplied: false }} />);
+    expect(screen.queryByTestId('report-guardrail')).not.toBeInTheDocument();
+  });
+
+  it('shows the data gap notice under the conclusion', () => {
+    render(<ReportOverview meta={baseMeta} summary={baseSummary} notice="部分資料缺漏" />);
+    expect(within(screen.getByTestId('report-conclusion')).getByTestId('report-gap-notice')).toHaveTextContent('部分資料缺漏');
+  });
+
+  it('toggles the watchlist from the star in the title row', () => {
+    const onToggle = vi.fn();
+    render(
+      <ReportOverview
+        meta={baseMeta}
+        summary={baseSummary}
+        watchlist={{ isInWatchlist: () => false, onToggle, isActioning: false, actionMessage: null }}
+      />,
+    );
+
+    fireEvent.click(within(screen.getByTestId('report-hero-header')).getByRole('button', { name: '加入自选' }));
+    expect(onToggle).toHaveBeenCalledWith('600519');
   });
 });

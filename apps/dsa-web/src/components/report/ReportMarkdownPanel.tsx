@@ -1,10 +1,13 @@
+import { Check, Copy } from 'lucide-react';
 import type React from 'react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { historyApi } from '../../api/history';
-import type { ReportLanguage } from '../../types/analysis';
+import { useUiLanguage } from '../../contexts/UiLanguageContext';
+import type { ReportLanguage, ReportSummary } from '../../types/analysis';
+import { buildDecisionActionLabelMap, getDecisionActionLabel } from '../../utils/decisionAction';
 import { markdownToPlainText } from '../../utils/markdown';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
-import { Tooltip } from '../common/Tooltip';
+import { extractReportHeadings, stripTrailingGeneratedAt } from '../../utils/reportMarkdown';
 import { ReportMarkdownBody } from './ReportMarkdownBody';
 import { ShareImageButton } from './ShareImageButton';
 
@@ -14,7 +17,11 @@ export interface ReportMarkdownPanelProps {
   stockCode: string;
   onRequestClose: () => void;
   reportLanguage?: ReportLanguage;
+  /** 固定結論列的內容；沒給就只顯示股名。 */
+  summary?: ReportSummary;
 }
+
+const SKELETON_WIDTHS = ['w-1/3', 'w-full', 'w-11/12', 'w-4/5', 'w-1/4', 'w-full', 'w-3/4'];
 
 export const ReportMarkdownPanel: React.FC<ReportMarkdownPanelProps> = ({
   recordId,
@@ -22,36 +29,50 @@ export const ReportMarkdownPanel: React.FC<ReportMarkdownPanelProps> = ({
   stockCode,
   onRequestClose,
   reportLanguage = 'zh',
+  summary,
 }) => {
+  const { t } = useUiLanguage();
   const text = getReportText(normalizeReportLanguage(reportLanguage));
   const loadReportFailedText = text.loadReportFailed;
   const [content, setContent] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [copiedType, setCopiedType] = useState<'markdown' | 'text' | null>(null);
+  const [copyMenuOpen, setCopyMenuOpen] = useState(false);
+  const copyMenuRef = useRef<HTMLDivElement>(null);
 
-  const handleCopyMarkdown = useCallback(async () => {
-    if (!content) return;
+  const copyToClipboard = useCallback(async (value: string, type: 'markdown' | 'text') => {
+    setCopyMenuOpen(false);
+    if (!value) return;
     try {
-      await navigator.clipboard.writeText(content);
-      setCopiedType('markdown');
+      await navigator.clipboard.writeText(value);
+      setCopiedType(type);
       setTimeout(() => setCopiedType(null), 2000);
-    } catch (error) {
-      console.error('Copy failed:', error);
+    } catch (copyError) {
+      console.error('Copy failed:', copyError);
     }
-  }, [content]);
+  }, []);
 
-  const handleCopyPlainText = useCallback(async () => {
-    if (!content) return;
-    try {
-      const plainText = markdownToPlainText(content);
-      await navigator.clipboard.writeText(plainText);
-      setCopiedType('text');
-      setTimeout(() => setCopiedType(null), 2000);
-    } catch (error) {
-      console.error('Copy failed:', error);
-    }
-  }, [content]);
+  useEffect(() => {
+    if (!copyMenuOpen) return undefined;
+    const handlePointer = (event: MouseEvent) => {
+      if (!copyMenuRef.current?.contains(event.target as Node)) setCopyMenuOpen(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        // 只收選單，不要連抽屜一起關。
+        event.stopPropagation();
+        setCopyMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointer);
+    document.addEventListener('keydown', handleKey, true);
+    return () => {
+      document.removeEventListener('mousedown', handlePointer);
+      document.removeEventListener('keydown', handleKey, true);
+    };
+  }, [copyMenuOpen]);
 
   useEffect(() => {
     let isMounted = true;
@@ -80,109 +101,116 @@ export const ReportMarkdownPanel: React.FC<ReportMarkdownPanelProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [recordId, loadReportFailedText]);
+  }, [recordId, loadReportFailedText, reloadKey]);
+
+  const bodyContent = useMemo(() => stripTrailingGeneratedAt(content), [content]);
+  const headings = useMemo(() => extractReportHeadings(bodyContent), [bodyContent]);
+  const actionLabel = summary
+    ? getDecisionActionLabel(summary.action, summary.actionLabel, summary.operationAdvice, null, buildDecisionActionLabelMap(t))
+    : null;
+  const conclusion = summary?.oneSentence?.trim() || summary?.analysisSummary?.trim() || null;
 
   return (
     <>
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div className="flex flex-1 items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--home-action-report-bg)] text-[var(--home-action-report-text)]">
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-          </div>
-          <div>
-            <h2 className="text-base font-semibold text-foreground">{stockName || stockCode}</h2>
+      {/* Drawer 內容區有 p-6，負邊距讓固定列貼齊捲動區上緣 */}
+      <div className="sticky top-0 z-10 -mx-6 -mt-6 mb-4 border-b border-border/60 bg-card px-6 py-3" data-testid="report-drawer-header">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-base font-semibold text-foreground">{stockName || stockCode}</h2>
             <p className="text-xs text-muted-text">{text.fullReport}</p>
           </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <ShareImageButton
-            recordId={recordId}
-            reportTitle={`${stockName || stockCode}-${stockCode}`}
-            reportLanguage={reportLanguage}
-          />
-          <Tooltip content={text.copyMarkdownSource}>
-            <span className="inline-flex">
+          <div className="flex shrink-0 items-center gap-2">
+            <ShareImageButton
+              recordId={recordId}
+              reportTitle={`${stockName || stockCode}-${stockCode}`}
+              reportLanguage={reportLanguage}
+            />
+            <div className="relative" ref={copyMenuRef}>
               <button
                 type="button"
-                onClick={handleCopyMarkdown}
-                disabled={isLoading || !content || copiedType !== null}
-                className="home-surface-button flex h-10 w-10 items-center justify-center rounded-lg text-secondary-text hover:text-foreground disabled:opacity-50"
-                aria-label={text.copyMarkdownSource}
+                aria-haspopup="menu"
+                aria-expanded={copyMenuOpen}
+                disabled={isLoading || !content}
+                onClick={() => setCopyMenuOpen((open) => !open)}
+                className="home-surface-button flex h-10 items-center gap-1.5 rounded-lg px-3 text-sm text-secondary-text hover:text-foreground disabled:opacity-50"
               >
-                {copiedType === 'markdown' ? (
-                  <svg className="h-6 w-6 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                ) : (
-                  <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                  </svg>
-                )}
+                {copiedType ? <Check className="h-4 w-4 text-success" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
+                {copiedType ? text.copied : text.copyMenu}
               </button>
-            </span>
-          </Tooltip>
-
-          <Tooltip content={text.copyPlainText}>
-            <span className="inline-flex">
-              <button
-                type="button"
-                onClick={handleCopyPlainText}
-                disabled={isLoading || !content || copiedType !== null}
-                className="home-surface-button flex h-10 w-10 items-center justify-center rounded-lg text-secondary-text hover:text-foreground disabled:opacity-50"
-                aria-label={text.copyPlainText}
-              >
-                {copiedType === 'text' ? (
-                  <svg className="h-6 w-6 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                ) : (
-                  <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                )}
-              </button>
-            </span>
-          </Tooltip>
+              {copyMenuOpen ? (
+                <div role="menu" className="absolute right-0 top-full z-20 mt-1 w-48 rounded-lg border border-border/70 bg-card p-1 shadow-soft-card">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => void copyToClipboard(content, 'markdown')}
+                    className="w-full rounded px-3 py-2 text-left text-sm text-foreground hover:bg-hover"
+                  >
+                    {text.copyMarkdownSource}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => void copyToClipboard(markdownToPlainText(content), 'text')}
+                    className="w-full rounded px-3 py-2 text-left text-sm text-foreground hover:bg-hover"
+                  >
+                    {text.copyPlainText}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
         </div>
+        {actionLabel || conclusion ? (
+          <p data-testid="report-drawer-conclusion" className="mt-2 line-clamp-2 text-sm leading-6 text-foreground">
+            {actionLabel ? <span className="mr-2 font-semibold">{actionLabel}</span> : null}
+            {conclusion}
+          </p>
+        ) : null}
+        {headings.length > 1 && !isLoading && !error ? (
+          <nav aria-label={text.tableOfContents} className="mt-2 flex gap-3 overflow-x-auto whitespace-nowrap pb-1 text-xs">
+            {headings.filter((heading) => heading.level <= 2).map((heading) => (
+              <button
+                key={heading.id}
+                type="button"
+                className="home-accent-link shrink-0"
+                onClick={() => document.getElementById(heading.id)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })}
+              >
+                {heading.title}
+              </button>
+            ))}
+          </nav>
+        ) : null}
       </div>
 
       {isLoading ? (
-        <div className="flex h-64 flex-col items-center justify-center">
-          <div className="home-spinner h-10 w-10 animate-spin border-[3px]" />
-          <p className="mt-4 text-sm text-secondary-text">{text.loadingReport}</p>
+        <div data-testid="report-drawer-skeleton" role="status" aria-label={text.loadingReport} className="animate-pulse space-y-3">
+          {SKELETON_WIDTHS.map((width, index) => (
+            <div key={index} className={`h-4 rounded bg-border/50 ${width}`} />
+          ))}
         </div>
       ) : error ? (
         <div className="flex h-64 flex-col items-center justify-center">
-          <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-danger/10">
-            <svg className="h-6 w-6 text-danger" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
+          <p role="alert" className="text-sm text-danger">{error}</p>
+          <div className="mt-4 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setReloadKey((key) => key + 1)}
+              className="home-surface-button rounded-lg px-4 py-2 text-sm text-foreground"
+            >
+              {text.retry}
+            </button>
+            <button
+              type="button"
+              onClick={onRequestClose}
+              className="home-surface-button rounded-lg px-4 py-2 text-sm text-secondary-text"
+            >
+              {text.dismiss}
+            </button>
           </div>
-          <p className="text-sm text-danger">{error}</p>
-          <button
-            type="button"
-            onClick={onRequestClose}
-            className="home-surface-button mt-4 rounded-lg px-4 py-2 text-sm text-secondary-text"
-          >
-            {text.dismiss}
-          </button>
         </div>
       ) : (
-        <ReportMarkdownBody content={content} />
+        <ReportMarkdownBody content={bodyContent} />
       )}
-
-      <div className="home-divider mt-6 flex justify-end border-t pt-4">
-        <button
-          type="button"
-          onClick={onRequestClose}
-          className="home-surface-button rounded-lg px-4 py-2 text-sm text-secondary-text hover:text-foreground"
-        >
-          {text.dismiss}
-        </button>
-      </div>
     </>
   );
 };

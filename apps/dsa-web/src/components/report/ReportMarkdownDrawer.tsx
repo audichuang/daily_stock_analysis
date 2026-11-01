@@ -1,6 +1,6 @@
 import type React from 'react';
 import { Component, lazy, Suspense, useCallback, useMemo, useState } from 'react';
-import type { ReportLanguage } from '../../types/analysis';
+import type { ReportLanguage, ReportSummary } from '../../types/analysis';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
 import { Drawer } from '../common/Drawer';
 
@@ -10,6 +10,7 @@ interface ReportMarkdownDrawerProps {
   stockCode: string;
   onClose: () => void;
   reportLanguage?: ReportLanguage;
+  summary?: ReportSummary;
 }
 
 interface ReportMarkdownDrawerErrorBoundaryProps {
@@ -88,6 +89,7 @@ export const ReportMarkdownDrawer: React.FC<ReportMarkdownDrawerProps> = ({
   stockCode,
   onClose,
   reportLanguage = 'zh',
+  summary,
 }) => {
   const [isOpen, setIsOpen] = useState(true);
   const text = getReportText(normalizeReportLanguage(reportLanguage));
@@ -126,6 +128,7 @@ export const ReportMarkdownDrawer: React.FC<ReportMarkdownDrawerProps> = ({
             stockCode={stockCode}
             reportLanguage={reportLanguage}
             onRequestClose={handleClose}
+            summary={summary}
           />
         </Suspense>
       </ReportMarkdownDrawerErrorBoundary>

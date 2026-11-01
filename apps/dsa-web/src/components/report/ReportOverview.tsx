@@ -1,15 +1,23 @@
-import { AlertBellLink } from '../alerts/AlertBellLink';
+import { Star } from 'lucide-react';
 import type React from 'react';
+import { AlertBellLink } from '../alerts/AlertBellLink';
 import type {
   ReportDetails as ReportDetailsType,
   ReportMeta,
   ReportSummary as ReportSummaryType,
 } from '../../types/analysis';
-import { Badge, Button, Card, ScoreGauge } from '../common';
-import { formatDateTime } from '../../utils/format';
-import { getMarketPhaseSummaryLabel, getPartialBarLabel } from '../../utils/marketPhase';
-import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
+import { cn } from '../../utils/cn';
+import {
+  buildDecisionActionLabelMap,
+  getDecisionActionLabel,
+  getDecisionActionTone,
+} from '../../utils/decisionAction';
+import { formatDateTime, formatPercent, formatPrice } from '../../utils/format';
+import { getMarketPhaseShortLabel, getPartialBarLabel } from '../../utils/marketPhase';
+import { marketToneClass } from '../../utils/marketTone';
+import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
+import { Badge, Card, IconButton, ScoreBar } from '../common';
 import { ShareImageButton } from './ShareImageButton';
 
 interface ReportOverviewProps {
@@ -17,6 +25,8 @@ interface ReportOverviewProps {
   summary: ReportSummaryType;
   details?: ReportDetailsType;
   isHistory?: boolean;
+  /** 缺資料影響判斷時的提示，放在結論下面。 */
+  notice?: string | null;
   watchlist?: {
     isInWatchlist: (code: string) => boolean;
     onToggle: (code: string) => void;
@@ -42,6 +52,16 @@ type PreparedBoard = {
   name: string;
   signal?: BoardSignal;
 };
+
+const ACTION_TONE_CLASS = {
+  brand: 'text-cyan',
+  neutral: 'text-secondary-text',
+  caution: 'text-warning',
+  default: 'text-foreground',
+} as const;
+
+// 盤中報價不是收盤價；其他階段的報價都是最近一場的收盤。
+const INTRADAY_PHASES = new Set(['intraday', 'lunch_break', 'closing_auction']);
 
 const normalizeBoardName = (value?: string): string =>
   (value || '').trim().replace(/\s+/g, ' ');
@@ -160,258 +180,238 @@ const buildPreparedRelatedBoards = (
   }, []);
 };
 
+/** 2026-10-30 → 10/30；不是日期字串回 null，不猜。 */
+const shortDate = (value?: string | null): string | null => {
+  const matched = /^\d{4}-(\d{2})-(\d{2})/.exec(value ?? '');
+  return matched ? `${matched[1]}/${matched[2]}` : null;
+};
+
 /**
- * 报告概览区组件 - 终端风格
+ * 報告首屏：股名與價格、結論列、分持股建議。單欄全寬，動作一律依枚舉查詞彙表，不用存檔的標籤。
  */
 export const ReportOverview: React.FC<ReportOverviewProps> = ({
   meta,
   summary,
   details,
+  notice,
   watchlist,
 }) => {
   const { t } = useUiLanguage();
   const reportLanguage = normalizeReportLanguage(meta.reportLanguage);
   const text = getReportText(reportLanguage);
-  const marketPhaseLabel = getMarketPhaseSummaryLabel(meta.marketPhaseSummary, reportLanguage);
+  const marketPhaseLabel = getMarketPhaseShortLabel(meta.marketPhaseSummary, reportLanguage);
   const partialBarLabel = meta.marketPhaseSummary?.isPartialBar === true
     ? getPartialBarLabel(reportLanguage)
     : null;
   const relatedBoards = (Array.isArray(details?.belongBoards) ? details.belongBoards : [])
     .filter((board) => normalizeBoardName(board?.name).length > 0);
-  const boardSignals = buildBoardSignalMaps(details);
-  const preparedRelatedBoards = buildPreparedRelatedBoards(relatedBoards, boardSignals);
+  const preparedRelatedBoards = buildPreparedRelatedBoards(relatedBoards, buildBoardSignalMaps(details));
 
-  const getPriceChangeStyle = (changePct: number | undefined): React.CSSProperties | undefined => {
-    if (changePct === undefined || changePct === null) {
-      return undefined;
-    }
-
-    if (changePct > 0) {
-      return { color: 'var(--market-up)' };
-    }
-
-    if (changePct < 0) {
-      return { color: 'var(--market-down)' };
-    }
-
-    return undefined;
-  };
-
-  const formatChangePct = (changePct: number | undefined): string => {
-    if (changePct === undefined || changePct === null) return '--';
-    const sign = changePct > 0 ? '+' : '';
-    return `${sign}${changePct.toFixed(2)}%`;
-  };
-
-  const getBoardStatusLabel = (status: BoardStatus): string => {
-    if (status === 'leading') {
-      return text.leadingBoard;
-    }
-    return text.laggingBoard;
-  };
-
-  const getBoardStatusVariant = (status: BoardStatus): 'success' | 'danger' => {
-    if (status === 'leading') {
-      return 'success';
-    }
-    return 'danger';
-  };
-
-  const renderBoardChip = (board: PreparedBoard) => (
-    <div
-      key={board.key}
-      className="inline-flex shrink-0 items-center gap-2 text-sm"
-    >
-      <span className="home-accent-chip px-2 py-0.5 text-xs font-medium">
-        {board.name}
-      </span>
-      {board.signal && (
-        <Badge
-          variant={getBoardStatusVariant(board.signal.status)}
-          className="home-board-status-badge shadow-none"
-        >
-          {getBoardStatusLabel(board.signal.status)}
-        </Badge>
-      )}
-      {board.signal && board.signal.changePct !== undefined && board.signal.changePct !== null && (
-        <span
-          className="text-xs font-mono"
-          style={getPriceChangeStyle(board.signal.changePct)}
-        >
-          {formatChangePct(board.signal.changePct)}
-        </span>
-      )}
-    </div>
+  const actionLabels = buildDecisionActionLabelMap(t);
+  const actionLabel = getDecisionActionLabel(
+    summary.action,
+    summary.actionLabel,
+    summary.operationAdvice,
+    text.noAdvice,
+    actionLabels,
   );
+  const actionToneClass = ACTION_TONE_CLASS[getDecisionActionTone(summary.action, summary.actionLabel, summary.operationAdvice)];
+  const oneSentence = summary.oneSentence?.trim() || null;
+  const analysisSummary = summary.analysisSummary?.trim() || null;
+  const sentence = oneSentence || analysisSummary || text.noAnalysisSummary;
+  const extraSummary = oneSentence && analysisSummary && analysisSummary !== oneSentence ? analysisSummary : null;
+  const score = typeof summary.sentimentScore === 'number' && Number.isFinite(summary.sentimentScore)
+    ? summary.sentimentScore
+    : null;
+
+  const currency = meta.currency ?? undefined;
+  const priceToneClass = marketToneClass(meta.changePct, 'text-foreground');
+  const priceDateText = shortDate(meta.priceDate);
+  const pricePhaseText = INTRADAY_PHASES.has(meta.marketPhaseSummary?.phase ?? '') ? text.priceIntraday : text.priceAtClose;
+  const changeAmount = typeof meta.changeAmount === 'number' ? meta.changeAmount : null;
+
+  const noPositionAdvice = summary.positionAdvice?.noPosition?.trim() || null;
+  const hasPositionAdvice = summary.positionAdvice?.hasPosition?.trim() || null;
+  const adviceColumns = [
+    noPositionAdvice ? { key: 'no-position', title: text.ifNoPosition, body: noPositionAdvice, pinned: false } : null,
+    hasPositionAdvice ? { key: 'has-position', title: text.ifHasPosition, body: hasPositionAdvice, pinned: meta.held === true } : null,
+  ].filter((column): column is { key: string; title: string; body: string; pinned: boolean } => column !== null);
+  // held 為 null 是無法判定，維持原順序、不標記；只有確定持有才把「手上有」置頂。
+  adviceColumns.sort((a, b) => Number(b.pinned) - Number(a.pinned));
+
+  const previous = meta.previousReport;
+  const previousDate = shortDate(previous?.createdAt);
+  const comparisonParts = previous ? [
+    previous.action ? `${actionLabels[previous.action]} → ${actionLabel}` : null,
+    typeof previous.score === 'number' && score !== null ? `${text.modelScore} ${previous.score} → ${score}` : null,
+    typeof previous.stopLoss === 'number' ? `${text.levelStopLoss} ${formatPrice(previous.stopLoss, currency)}` : null,
+  ].filter((part): part is string => part !== null) : [];
+
+  const canToggleWatchlist = Boolean(watchlist) && meta.reportType !== 'market_review' && meta.assetType !== 'index';
+  const inWatchlist = watchlist?.isInWatchlist(meta.stockCode) ?? false;
+  const trendPrediction = summary.trendPrediction?.trim() || null;
 
   return (
-    <div className="space-y-5">
-      {/* 主信息区 - 两列布局 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
-        {/* 左侧：股票信息与结论 */}
-        <div className="lg:col-span-2 space-y-5">
-          {/* 股票头部 */}
-          <Card variant="gradient" padding="md" className="home-report-hero">
-            {/* 手機寬時分享鈕與價格換行，不壓縮股名（中文股名會被擠成一字一行） */}
-            <div className="mb-5 flex flex-wrap items-start justify-between gap-3" data-testid="report-hero-header">
-              <div className="min-w-[12rem] flex-1">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                  <h2 className="text-[28px] font-bold leading-tight text-foreground">
-                    {meta.stockName || meta.stockCode}
-                  </h2>
-                  {/* 价格和涨跌幅 */}
-                  {meta.currentPrice != null && (
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-xl font-bold font-mono" style={getPriceChangeStyle(meta.changePct)}>
-                        {meta.currentPrice.toFixed(2)}
-                      </span>
-                      <span className="text-sm font-semibold font-mono" style={getPriceChangeStyle(meta.changePct)}>
-                        {formatChangePct(meta.changePct)}
-                      </span>
-                    </div>
-                  )}
-                </div>
-                <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                  <span className="home-accent-chip px-2 py-0.5 font-mono text-xs">
-                    {meta.stockCode}
-                  </span>
-                  <AlertBellLink code={meta.stockCode} />
-                  {marketPhaseLabel ? (
-                    <Badge variant="info" className="shrink-0 gap-1.5 shadow-none" aria-label={marketPhaseLabel}>
-                      {marketPhaseLabel}
-                    </Badge>
-                  ) : null}
-                  {partialBarLabel ? (
-                    <Badge variant="warning" className="shrink-0 shadow-none" aria-label={partialBarLabel}>
-                      {partialBarLabel}
-                    </Badge>
-                  ) : null}
-                  <span className="text-xs text-muted-text flex items-center gap-1">
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                    {formatDateTime(meta.createdAt)}
-                  </span>
-                </div>
-              </div>
-              <ShareImageButton
-                recordId={meta.id}
-                reportTitle={`${meta.stockName || meta.stockCode}-${meta.stockCode}`}
-                reportLanguage={reportLanguage}
-              />
-            </div>
-
-            {/* 关键结论 */}
-            <div className="home-divider border-t pt-5">
-              <span className="label-uppercase">{text.keyInsights}</span>
-              <p className="mt-2 max-w-[62ch] whitespace-pre-wrap text-left text-[15px] leading-7 text-foreground">
-                {summary.analysisSummary || text.noAnalysisSummary}
-              </p>
-              {details?.emptyNewsDisclosure ? (
-                <p
-                  role="note"
-                  className="mt-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-left text-sm leading-6 text-foreground"
-                >
-                  {details.emptyNewsDisclosure}
-                </p>
-              ) : null}
-            </div>
-          </Card>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
-            {/* 操作建议 */}
-            <Card
-              variant="bordered"
-              padding="sm"
-              hoverable
-              className="home-panel-card home-insight-card"
-              style={{ ['--home-insight-tone' as string]: 'var(--home-strategy-buy)' }}
-            >
-              <div className="flex items-start gap-3">
-                <div className="home-insight-icon w-8 h-8 rounded-lg bg-success/10 flex items-center justify-center flex-shrink-0">
-                  <svg className="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-                  </svg>
-                </div>
-                <div className="space-y-1.5">
-                  <h4 className="home-insight-title text-[11px] font-medium uppercase tracking-[0.16em]">{text.actionAdvice}</h4>
-                  <p className="home-insight-body text-sm leading-6">
-                    {summary.operationAdvice || text.noAdvice}
-                  </p>
-                </div>
-              </div>
-            </Card>
-
-            {/* 趋势预测 */}
-            <Card
-              variant="bordered"
-              padding="sm"
-              hoverable
-              className="home-panel-card home-insight-card"
-              style={{ ['--home-insight-tone' as string]: 'var(--home-strategy-take)' }}
-            >
-              <div className="flex items-start gap-3">
-                <div className="home-insight-icon w-8 h-8 rounded-lg bg-warning/10 flex items-center justify-center flex-shrink-0">
-                  <svg className="w-4 h-4 text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                  </svg>
-                </div>
-                <div className="space-y-1.5">
-                  <h4 className="home-insight-title text-[11px] font-medium uppercase tracking-[0.16em]">{text.trendPrediction}</h4>
-                  <p className="home-insight-body text-sm leading-6">
-                    {summary.trendPrediction || text.noPrediction}
-                  </p>
-                </div>
-              </div>
-            </Card>
-          </div>
-
-          {preparedRelatedBoards.length > 0 && (
-            <Card variant="bordered" padding="sm" className="home-panel-card min-w-0 max-w-full text-left">
-              <section aria-label={text.relatedBoards} className="min-w-0 max-w-full">
-                <div className="mb-3 flex min-w-0 items-baseline gap-2">
-                  <span className="label-uppercase">{text.boardLinkage}</span>
-                  <h3 className="mt-0.5 text-base font-semibold text-foreground">{text.relatedBoards}</h3>
-                </div>
-
-                <div className="home-related-board-list flex min-h-6 w-full min-w-0 max-w-full flex-nowrap items-center gap-2 overflow-x-auto overscroll-x-contain touch-pan-x pb-1">
-                  {preparedRelatedBoards.map(renderBoardChip)}
-                </div>
-              </section>
-            </Card>
-          )}
-        </div>
-
-        {/* 右侧：情绪指标 / 自选操作 */}
-        <div className="flex flex-col space-y-4">
-          {watchlist && meta.reportType !== 'market_review' && meta.assetType !== 'index' && (
-            <Card variant="bordered" padding="sm" className="home-panel-card">
-              <div className="text-center space-y-3">
-                <span className="label-uppercase">{t('report.watchlist')}</span>
-                <div className="text-xs text-muted-text font-mono">{meta.stockCode}</div>
-                <Button
-                  variant={watchlist.isInWatchlist(meta.stockCode) ? 'danger-subtle' : 'secondary'}
+    <div className="space-y-4">
+      <Card variant="highlight" padding="md" className="home-report-hero">
+        {/* 手機寬時分享鈕換行，不壓縮股名（中文股名會被擠成一字一行） */}
+        <div className="flex flex-wrap items-start justify-between gap-3" data-testid="report-hero-header">
+          <div className="min-w-[12rem] flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-[28px] font-bold leading-tight text-foreground">
+                {meta.stockName || meta.stockCode}
+              </h2>
+              <span className="home-accent-chip px-2 py-0.5 font-mono text-xs">{meta.stockCode}</span>
+              {canToggleWatchlist && watchlist ? (
+                <IconButton
                   size="sm"
-                  isLoading={watchlist.isActioning}
+                  aria-label={inWatchlist ? t('report.removeFromWatchlist') : t('report.addToWatchlist')}
+                  aria-pressed={inWatchlist}
+                  disabled={watchlist.isActioning}
                   onClick={() => watchlist.onToggle(meta.stockCode)}
-                  className="w-full text-xs"
-                >
-                  {watchlist.isInWatchlist(meta.stockCode) ? t('report.removeFromWatchlist') : t('report.addToWatchlist')}
-                </Button>
-                {watchlist.actionMessage && (
-                  <p className="text-[11px] text-secondary-text animate-in fade-in">{watchlist.actionMessage}</p>
-                )}
+                  icon={<Star className={cn('h-4 w-4', inWatchlist && 'fill-current text-warning')} aria-hidden="true" />}
+                />
+              ) : null}
+              <AlertBellLink code={meta.stockCode} />
+            </div>
+            {watchlist?.actionMessage && canToggleWatchlist ? (
+              <p className="mt-1 text-[11px] text-secondary-text">{watchlist.actionMessage}</p>
+            ) : null}
+            {typeof meta.currentPrice === 'number' ? (
+              <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1" data-testid="report-price">
+                <span className={cn('text-4xl font-bold tabular-nums', priceToneClass)}>
+                  {formatPrice(meta.currentPrice, currency)}
+                </span>
+                <span className={cn('text-base font-semibold tabular-nums', priceToneClass)}>
+                  {changeAmount !== null ? `${changeAmount > 0 ? '+' : ''}${formatPrice(changeAmount, currency)} ` : ''}
+                  {formatPercent(meta.changePct)}
+                </span>
+                {priceDateText ? (
+                  <span className="text-xs text-muted-text">{priceDateText} {pricePhaseText}</span>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              {marketPhaseLabel ? (
+                <Badge variant="info" className="shrink-0 gap-1.5 shadow-none" aria-label={marketPhaseLabel}>
+                  {marketPhaseLabel}
+                </Badge>
+              ) : null}
+              {partialBarLabel ? (
+                <Badge variant="warning" className="shrink-0 shadow-none" aria-label={partialBarLabel}>
+                  {partialBarLabel}
+                </Badge>
+              ) : null}
+              <span className="text-xs text-muted-text">{formatDateTime(meta.createdAt)}</span>
+            </div>
+          </div>
+          <ShareImageButton
+            recordId={meta.id}
+            reportTitle={`${meta.stockName || meta.stockCode}-${meta.stockCode}`}
+            reportLanguage={reportLanguage}
+          />
+        </div>
+
+        <div className="home-divider mt-3 border-t pt-3" data-testid="report-conclusion">
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            <span data-testid="report-action" className={cn('text-3xl font-bold leading-tight', actionToneClass)}>
+              {actionLabel}
+            </span>
+            <p className="min-w-[14rem] flex-1 whitespace-pre-wrap text-left text-base font-medium leading-7 text-foreground">
+              {sentence}
+            </p>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-secondary-text">
+            {summary.timeSensitivity?.trim() ? <span data-testid="report-time-sensitivity">{summary.timeSensitivity.trim()}</span> : null}
+            {summary.confidenceLevel?.trim() ? (
+              <span title={summary.confidenceReason?.trim() || undefined}>
+                {text.confidenceLabel} <span className="font-semibold text-foreground">{summary.confidenceLevel.trim()}</span>
+              </span>
+            ) : null}
+            {score !== null ? <ScoreBar score={score} label={text.modelScore} className="w-56 max-w-full" /> : null}
+            {comparisonParts.length > 0 ? (
+              <span data-testid="report-comparison">
+                {text.previousReport}{previousDate ? ` ${previousDate}` : ''}：{comparisonParts.join('，')}
+              </span>
+            ) : null}
+            {summary.guardrailApplied === true ? (
+              <span className="inline-flex flex-wrap items-center gap-1.5" data-testid="report-guardrail">
+                <Badge variant="warning" className="shadow-none">{text.guardrailAdjusted}</Badge>
+                {summary.guardrailReason?.trim() ? <span>{summary.guardrailReason.trim()}</span> : null}
+              </span>
+            ) : null}
+          </div>
+          {notice ? (
+            <p role="note" data-testid="report-gap-notice" className="mt-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-left text-sm leading-6 text-foreground">
+              {notice}
+            </p>
+          ) : null}
+          {details?.emptyNewsDisclosure ? (
+            <p role="note" className="mt-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-left text-sm leading-6 text-foreground">
+              {details.emptyNewsDisclosure}
+            </p>
+          ) : null}
+          {extraSummary ? (
+            <details className="mt-2 text-left text-sm">
+              <summary className="cursor-pointer text-xs text-secondary-text">{text.analysisDetail}</summary>
+              <p className="mt-1 max-w-[72ch] whitespace-pre-wrap leading-6 text-foreground">{extraSummary}</p>
+            </details>
+          ) : null}
+        </div>
+      </Card>
+
+      {adviceColumns.length > 0 ? (
+        <div className={cn('grid grid-cols-1 gap-3', adviceColumns.length > 1 && 'md:grid-cols-2')} data-testid="report-position-advice">
+          {adviceColumns.map((column) => (
+            <Card key={column.key} variant="surface" padding="sm" className="home-panel-card text-left">
+              <div data-testid={`advice-${column.key}`} data-pinned={column.pinned}>
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  {column.title}
+                  {column.pinned ? <Badge variant="info" className="shadow-none">{text.heldMarker}</Badge> : null}
+                </h3>
+                <p className="mt-1 text-sm leading-6 text-secondary-text">{column.body}</p>
               </div>
             </Card>
-          )}
-          <Card variant="bordered" padding="md" className="home-panel-card home-rail-card !overflow-visible">
-            <div className="text-center">
-              <h3 className="mb-5 text-sm font-medium tracking-wide text-foreground">{text.marketSentiment}</h3>
-              <ScoreGauge score={summary.sentimentScore} size="lg" language={reportLanguage} />
-            </div>
-          </Card>
+          ))}
         </div>
-      </div>
+      ) : (
+        <Card variant="surface" padding="sm" className="home-panel-card text-left">
+          <h3 className="text-sm font-semibold text-foreground">{text.actionAdvice}</h3>
+          <p className="mt-1 text-sm leading-6 text-secondary-text">{summary.operationAdvice || text.noAdvice}</p>
+        </Card>
+      )}
+
+      {trendPrediction || preparedRelatedBoards.length > 0 ? (
+        <div className="min-w-0 max-w-full space-y-2 px-1 text-left">
+          {trendPrediction ? (
+            <p className="text-xs leading-5 text-secondary-text">
+              <span className="text-muted-text">{text.trendPrediction}：</span>{trendPrediction}
+            </p>
+          ) : null}
+          {preparedRelatedBoards.length > 0 ? (
+            <section aria-label={text.relatedBoards} className="flex min-w-0 max-w-full items-center gap-2">
+              <span className="shrink-0 text-xs text-muted-text">{text.relatedBoards}</span>
+              <div className="home-related-board-list flex min-h-6 w-full min-w-0 max-w-full flex-nowrap items-center gap-2 overflow-x-auto overscroll-x-contain touch-pan-x pb-1">
+                {preparedRelatedBoards.map((board) => (
+                  <div key={board.key} className="inline-flex shrink-0 items-center gap-1.5 text-xs">
+                    <span className="home-accent-chip px-2 py-0.5 font-medium">{board.name}</span>
+                    {board.signal ? (
+                      <span className="text-secondary-text">
+                        {board.signal.status === 'leading' ? text.leadingBoard : text.laggingBoard}
+                      </span>
+                    ) : null}
+                    {board.signal?.changePct !== undefined ? (
+                      <span className={cn('tabular-nums', marketToneClass(board.signal.changePct))}>
+                        {formatPercent(board.signal.changePct)}
+                      </span>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 };
