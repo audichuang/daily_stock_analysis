@@ -21,10 +21,16 @@ public struct PortfolioOverview: Equatable, Sendable {
 
 public extension PortfolioSnapshot {
     /// 基金持倉獨立於股票帳戶，只有基金時仍算有資產。
-    var hasAnyAssets: Bool { !accounts.isEmpty || (consolidatedFundValueBase ?? 0) > 0 }
+    var hasAnyAssets: Bool { !accounts.isEmpty || hasFundHoldings || (consolidatedFundValueBase ?? 0) > 0 }
+
+    private var hasFundHoldings: Bool { !(funds?.items ?? []).isEmpty }
+
+    /// 只有基金、淨值又讀不到：有資產但金額未知，不能顯示成 0。
+    var fundOnlyValueUnknown: Bool { accounts.isEmpty && hasFundHoldings && consolidatedFundValueBase == nil }
 
     /// 帳本加基金的今日損益。基金有市值卻讀不到當日損益時整體未知，不把缺值當 0。
     var combinedDayPnl: Double? {
+        if fundOnlyValueUnknown { return nil }
         if (consolidatedFundValueBase ?? 0) > 0, consolidatedFundDayPnlBase == nil { return nil }
         let stock = consolidatedDayPnlBase ?? (accounts.isEmpty ? 0 : nil)
         return stock.map { $0 + (consolidatedFundDayPnlBase ?? 0) }
@@ -34,7 +40,7 @@ public extension PortfolioSnapshot {
     var overview: PortfolioOverview? {
         guard let displayCurrency, !displayCurrency.isEmpty else { return nil }
         let fund = consolidatedFundValueBase
-        let total = (consolidatedEquityBase ?? (accounts.isEmpty ? 0 : nil)).map { $0 + (fund ?? 0) }
+        let total = fundOnlyValueUnknown ? nil : (consolidatedEquityBase ?? (accounts.isEmpty ? 0 : nil)).map { $0 + (fund ?? 0) }
         let day = combinedDayPnl
         var percent: Double?
         if let unrealized = consolidatedUnrealizedPnlBase, let value = consolidatedMarketValueBase, value - unrealized > 0 {

@@ -441,6 +441,7 @@ public struct PortfolioSnapshot: Codable, Sendable {
     public let accounts: [PortfolioAccount]
     // 以下皆為追加欄位；頂層 total_* 仍是 CNY 彙總，帶 display_currency 才有 consolidated_*。
     public let dayPnl: Double?
+    public let funds: PortfolioFundsBlock?
     public let displayCurrency: String?
     public let consolidatedEquityBase: Double?
     public let consolidatedMarketValueBase: Double?
@@ -659,6 +660,13 @@ public struct EventCalendarResponse: Codable, Sendable {
 }
 
 // MARK: - I09～I11 個股與報告追加型別
+
+/// 只用來判斷有沒有基金持倉；淨值讀不到時 consolidated_fund_value_base 是 nil，持倉仍在。
+public struct PortfolioFundsBlock: Codable, Sendable {
+    public struct Item: Codable, Sendable {}
+
+    public let items: [Item]?
+}
 
 public struct StockProfilePortfolioBlock: Codable, Sendable {
     public struct Relation: Codable, Sendable {

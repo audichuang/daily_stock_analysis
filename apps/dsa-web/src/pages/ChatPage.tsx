@@ -113,7 +113,7 @@ const ChatPage: React.FC = () => {
   const [historyKeyword, setHistoryKeyword] = useState('');
   const [inputFocused, setInputFocused] = useState(false);
   const [holdings, setHoldings] = useState<EmptyStockShortcut[]>([]);
-  const [activeQuote, setActiveQuote] = useState<StockQuote | null>(null);
+  const [quoteState, setQuoteState] = useState<{ code: string; quote: StockQuote | null } | null>(null);
   const [expandedThinking, setExpandedThinking] = useState<Set<string>>(new Set());
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -397,15 +397,18 @@ const ChatPage: React.FC = () => {
     let active = true;
     void stocksApi.getQuotes([activeStockCode])
       .then((items) => {
-        if (active) setActiveQuote(items[0]?.quote ?? null);
+        if (active) setQuoteState({ code: activeStockCode, quote: items[0]?.quote ?? null });
       })
       .catch(() => {
-        if (active) setActiveQuote(null);
+        if (active) setQuoteState({ code: activeStockCode, quote: null });
       });
     return () => {
       active = false;
     };
   }, [activeStockCode, loading]);
+
+  // 報價跟著代碼走：換標的後、新報價回來前不能顯示上一檔的價格。
+  const activeQuote = quoteState?.code === activeStockCode ? quoteState.quote : null;
 
   const watchlistShortcuts: EmptyStockShortcut[] = watchlistCodes.slice(0, MAX_EMPTY_STOCKS).map((code) => {
     const matched = stockIndex.find((item) => item.canonicalCode === code || item.displayCode === code);

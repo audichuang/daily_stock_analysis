@@ -83,6 +83,11 @@ describe('FundsPage', () => {
     get.mockImplementation(route);
   });
 
+  it('opens the mobile detail layer for an explicit ?fund= deep link', async () => {
+    renderPage('/funds?fund=18480065');
+    expect((await screen.findByTestId('funds-detail')).className).not.toContain('hidden md:block');
+  });
+
   it('lists fund holdings with market value from the latest NAV', async () => {
     renderPage();
     expect((await screen.findAllByText('安联台湾科技基金')).length).toBeGreaterThan(0);

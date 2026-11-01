@@ -1206,6 +1206,22 @@ describe('ChatPage', () => {
     expect(mockGetQuotes).toHaveBeenCalledWith(['2330.TW']);
   });
 
+  it('does not show the previous stock quote after switching stock', async () => {
+    mockStoreState.activeStockContext = { stock_code: '2330.TW', canonical_id: '2330.TW', stock_name: '台积电', asset_type: 'stock' } as ActiveStockContext;
+    mockStoreState.messages = [{ id: 'a-1', role: 'assistant', content: '回答' }];
+    mockGetQuotes.mockResolvedValueOnce([{ stockCode: '2330.TW', quote: { stockCode: '2330.TW', currentPrice: 1050, changePercent: 1 } }]);
+
+    const view = render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByTestId('chat-stock-summary')).toHaveTextContent('1,050'));
+
+    mockStoreState.activeStockContext = { stock_code: 'AAPL', canonical_id: 'AAPL', stock_name: 'Apple', asset_type: 'stock' } as ActiveStockContext;
+    mockGetQuotes.mockReturnValueOnce(new Promise(() => undefined));
+    view.rerender(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getByTestId('chat-stock-summary')).toHaveTextContent('AAPL'));
+    expect(screen.getByTestId('chat-stock-summary')).not.toHaveTextContent('1,050');
+  });
+
   it('does not attach the previous stock answer to a newly active stock', async () => {
     mockStoreState.activeStockContext = { stock_code: 'AAPL', canonical_id: 'AAPL', stock_name: 'Apple', asset_type: 'stock' } as ActiveStockContext;
     mockStoreState.messages = [

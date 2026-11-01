@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 手機報告的「完整分析報告／追問 AI」操作列不再被底部分頁蓋住；手機開 `/funds?fund=` 直接顯示基金詳情；`?stock=` 查無報告或查詢失敗時不再顯示上一檔報告
+- [修復] 問股切換標的後，摘要卡不再顯示上一檔的結論、價位與報價
+- [修復] 回測市場篩選不再把 SHOP、SHEL、HKD 判成中港股，也不再把日韓代號算進美股
+- [修復] 基金有市值但當日損益未知、前收盤過期或太舊時，今日損益顯示未知（Web、iOS）；iOS 只有基金持倉時仍顯示資產總覽，持股查詢失敗時並列兩種建議，損益未知不再說「沒有虧損部位」
 - [修復] 美股選股的日線把代碼補零成 `000LLY`，所有資料源都查無，`volume_breakout`、`shrink_pullback` 永遠 0 檔；只有純數字代碼才補零
 - [修復] 美股選股母體抓 S&P 500 時被維基百科以 403 擋下，靜默退回內建 50 檔；請求改帶 User-Agent
 - [修復] 選股 LLM 排序的預設上限 `LLM_MAX_TOKENS` 由 2048 調成 16000：Sonnet 5.5 的 adaptive thinking 算在額度內，原上限回空後靜默退回 `screen_score`

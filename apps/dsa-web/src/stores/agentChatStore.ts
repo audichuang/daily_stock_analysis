@@ -237,7 +237,9 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
         && current.sessionGeneration !== decoded.sessionGeneration;
       if (replacedInstance) current.abortController?.abort();
       set({ ...patch, ...(replacedInstance ? emptyStreamState : {}),
-        messages: detail.messages.map((m) => ({ id: m.id, role: m.role, content: m.content, createdAt: m.created_at })), chatError: null });
+        // 還原的回答沒存股票身分，先記下載入當時的標的；之後換股失敗才不會掛到新標的上。
+        messages: detail.messages.map((m) => ({ id: m.id, role: m.role, content: m.content, createdAt: m.created_at,
+          stockCode: decoded.activeStockContext?.stock_code ?? null })), chatError: null });
     } catch (error) {
       if (ownsRead()) set({ chatError: getParsedApiError(error) });
     }

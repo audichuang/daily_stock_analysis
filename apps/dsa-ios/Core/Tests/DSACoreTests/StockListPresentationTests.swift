@@ -160,6 +160,11 @@ final class StockListPresentationTests: XCTestCase {
         XCTAssertEqual(fundOnly.todayAssetSummary?.equity, 20_000)
         XCTAssertEqual(fundOnly.overview?.dayPnl, 50)
         XCTAssertFalse(try snapshot(extra: nil, accounts: "[]").hasAnyAssets)
+
+        let navDown = try snapshot(extra: #""display_currency":"TWD","consolidated_equity_base":0,"consolidated_fund_value_base":null,"funds":{"items":[{"fund_id":"1"}]}"#, accounts: "[]")
+        XCTAssertTrue(navDown.hasAnyAssets, "淨值讀不到時持倉仍在")
+        XCTAssertNil(navDown.overview?.totalAssets, "金額未知不能顯示成 0")
+        XCTAssertNil(navDown.overview?.dayPnl)
     }
 
     func testHoldingUnknownIsNotTreatedAsFlat() throws {

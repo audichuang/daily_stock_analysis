@@ -209,7 +209,8 @@ const FundsPage: React.FC = () => {
   const [pendingDelete, setPendingDelete] = useState<FundHoldingItem | null>(null);
   const [sort, setSort] = useState<SortState>({ key: 'marketValue', direction: 'desc' });
   // 手機的全螢幕詳情層：預設選第一檔不開，使用者點了才開。
-  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+  // 帶 ?fund= 進來是明確要看這檔（盯盤基金卡、重新整理）；自動選取發生在掛載之後，不受影響。
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(() => selectedId !== null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const loadHoldings = useCallback(async () => {
