@@ -310,3 +310,17 @@ def test_event_config_reads_environment_with_safe_defaults(env, enabled, thresho
     assert config.event_gap_decision_enabled is enabled
     assert config.event_gap_threshold_pct == threshold
     assert config.event_gap_lookback_sessions == 5
+
+
+def test_blocked_without_news_clears_split_conditions():
+    from types import SimpleNamespace
+
+    from src.services.event_gap import apply_event_gap_guard
+
+    result = SimpleNamespace(
+        news_evidence_present=False,
+        dashboard={"phase_decision": {"entry_conditions": ["站回 70 買進"], "exit_triggers": ["跌破 60"]}},
+    )
+    apply_event_gap_guard(result, {"triggered": True}, "zh-TW")
+    phase = result.dashboard["phase_decision"]
+    assert phase["entry_conditions"] == [] and phase["exit_triggers"] == []

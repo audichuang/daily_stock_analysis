@@ -29,7 +29,8 @@ from src.agent.runtime_facts import AgentRuntimeFacts
 from src.agent.stock_scope import StockScope, StockScopeResolution, resolve_stock_scope
 from src.storage import get_db
 from src.agent.tools.registry import ToolRegistry
-from src.report_language import normalize_report_language
+from src.utils.zh_s2t import localize_template
+from src.report_language import ZH_TW_PROMPT_GLOSSARY, normalize_report_language
 from src.market_context import get_market_role, get_market_guidelines
 from src.market_phase_prompt import format_market_phase_prompt_section
 from src.market_structure_prompt import format_market_structure_prompt_section
@@ -134,6 +135,9 @@ LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{mar
             "action_window": "盘前计划/盘中跟踪/午间确认/收盘前风控/盘后复盘/非交易日观察",
             "immediate_action": "立即行动/等待确认/观察/止损止盈预警/禁止追高/无盘中动作",
             "watch_conditions": ["观察条件1", "观察条件2"],
+            "entry_conditions": ["空手者的进场条件，含价位；没有就给空数组"],
+            "exit_triggers": ["持股者的出场或改判条件，含价位；没有就给空数组"],
+            "pending_events": ["待确认的事件与日期；没有就给空数组"],
             "next_check_time": "下一次检查点或市场本地时间",
             "confidence_reason": "置信度理由，说明阶段和数据质量限制",
             "data_limitations": ["阶段或数据质量限制1", "阶段或数据质量限制2"]
@@ -147,7 +151,7 @@ LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{mar
             "strongest_bearish_signal": "最强看空信号名称"
         }}
     }},
-    "analysis_summary": "100字综合分析摘要",
+    "analysis_summary": "100字摘要，只写发生什么、为何发生、与前次的差异；操作建议写在 one_sentence 与 position_advice，这里不重复；不得出现“依规则”“判定为”“持股者”“空手者”，不引用任何评分数字",
     "key_points": "3-5个核心看点，逗号分隔",
     "risk_warning": "风险提示",
     "buy_reason": "操作理由，引用交易理念",
@@ -282,6 +286,9 @@ AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数
             "action_window": "盘前计划/盘中跟踪/午间确认/收盘前风控/盘后复盘/非交易日观察",
             "immediate_action": "立即行动/等待确认/观察/止损止盈预警/禁止追高/无盘中动作",
             "watch_conditions": ["观察条件1", "观察条件2"],
+            "entry_conditions": ["空手者的进场条件，含价位；没有就给空数组"],
+            "exit_triggers": ["持股者的出场或改判条件，含价位；没有就给空数组"],
+            "pending_events": ["待确认的事件与日期；没有就给空数组"],
             "next_check_time": "下一次检查点或市场本地时间",
             "confidence_reason": "置信度理由，说明阶段和数据质量限制",
             "data_limitations": ["阶段或数据质量限制1", "阶段或数据质量限制2"]
@@ -295,7 +302,7 @@ AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数
             "strongest_bearish_signal": "最强看空信号名称"
         }}
     }},
-    "analysis_summary": "100字综合分析摘要",
+    "analysis_summary": "100字摘要，只写发生什么、为何发生、与前次的差异；操作建议写在 one_sentence 与 position_advice，这里不重复；不得出现“依规则”“判定为”“持股者”“空手者”，不引用任何评分数字",
     "key_points": "3-5个核心看点，逗号分隔",
     "risk_warning": "风险提示",
     "buy_reason": "操作理由，引用激活技能或风险框架",
@@ -447,7 +454,7 @@ def _build_language_section(report_language: str, *, chat_mode: bool = False) ->
 
 - 全程使用繁體中文（台灣用語）回答，不得使用簡體字或中國大陸用語。
 - 若輸出 JSON，鍵名保持不變，所有面向使用者的文字值使用繁體中文。
-"""
+""" + ZH_TW_PROMPT_GLOSSARY
         return """
 ## 输出语言
 
@@ -475,7 +482,7 @@ def _build_language_section(report_language: str, *, chat_mode: bool = False) ->
 - `action` 必須保持為 `buy|add|hold|reduce|sell|watch|avoid|alert` 其中之一。
 - 所有面向使用者的人類可讀文字值必須使用繁體中文（台灣用語），不得使用簡體字或中國大陸用語。
 - 包含 `stock_name`、`trend_prediction`、`operation_advice`、`confidence_level`、所有儀表板文字、檢查清單項目與摘要。
-"""
+""" + ZH_TW_PROMPT_GLOSSARY
 
     return """
 ## 输出语言
@@ -548,6 +555,8 @@ def prepare_agent_chat(
         skills_section=skills_section,
         language_section=_build_language_section(report_language, chat_mode=True),
     )
+    # 上游模板是簡體，本體語言會壓過語言指令。
+    system_prompt = localize_template(system_prompt, report_language)
 
     if include_provider_trace:
         history_messages = list(
@@ -684,6 +693,7 @@ class AgentExecutor:
             skills_section=skills_section,
             language_section=_build_language_section(report_language),
         )
+        system_prompt = localize_template(system_prompt, report_language)
 
         from src.services.event_gap import event_gap_prompt
         system_prompt += event_gap_prompt((context or {}).get("event_gap"))

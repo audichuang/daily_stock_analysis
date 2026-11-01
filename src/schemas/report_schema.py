@@ -138,6 +138,10 @@ class PhaseDecision(BaseModel):
     action_window: Optional[str] = None
     immediate_action: Optional[str] = None
     watch_conditions: List[str] = Field(default_factory=list)
+    # 從 watch_conditions 拆出的三類；舊報告沒有，保持 None 不補空陣列。
+    entry_conditions: Optional[List[str]] = None
+    exit_triggers: Optional[List[str]] = None
+    pending_events: Optional[List[str]] = None
     next_check_time: Optional[str] = None
     confidence_reason: Optional[str] = None
     data_limitations: List[str] = Field(default_factory=list)

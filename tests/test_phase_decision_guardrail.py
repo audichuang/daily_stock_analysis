@@ -323,3 +323,50 @@ def test_guardrail_creates_dashboard_for_agent_compatible_result_object() -> Non
     assert adjustments == []
     assert result.dashboard["phase_decision"]["phase_context"]["phase"] == "intraday"
     assert result.dashboard["phase_decision"]["watch_conditions"] == []
+
+
+def _premarket_hold(advice: str, language: str = "zh-TW"):
+    # decision_type=hold 時只有 marker 會觸發，才測得到 marker 表本身。
+    result = _result(
+        operation_advice=advice,
+        decision_type="hold",
+        confidence_level="中",
+        dashboard={"phase_decision": {"immediate_action": advice}},
+    )
+    return apply_phase_decision_guardrails(
+        result,
+        market_phase_summary=_phase("premarket"),
+        analysis_context_pack_overview=None,
+        report_language=language,
+    )
+
+
+def test_traditional_immediate_markers_are_caught() -> None:
+    for advice in ("立即減碼", "馬上減碼", "立即買進", "馬上買進", "立即加碼", "馬上加碼", "立即減倉", "立即賣出"):
+        assert "non_intraday_action_adjusted" in _premarket_hold(advice), advice
+
+
+def test_negated_traditional_markers_are_not_caught() -> None:
+    # 反向：補了 marker 也不能把否定句當即時動作。
+    for advice in ("不建議立即減碼", "暫不立即買進", "無需立即賣出", "續抱觀察"):
+        assert "non_intraday_action_adjusted" not in _premarket_hold(advice), advice
+
+
+def test_zh_tw_reason_text_is_traditional_and_zh_stays_simplified() -> None:
+    def reason(language):
+        result = _result(
+            operation_advice="立即減碼" if language == "zh-TW" else "立即减仓",
+            decision_type="hold",
+            confidence_level="中",
+            dashboard={"phase_decision": {}},
+        )
+        apply_phase_decision_guardrails(
+            result,
+            market_phase_summary=_phase("premarket"),
+            analysis_context_pack_overview=None,
+            report_language=language,
+        )
+        return result.dashboard["phase_decision"]["confidence_reason"]
+
+    assert reason("zh-TW") == "當前市場階段不支持即時盤中買賣動作。"
+    assert reason("zh") == "当前市场阶段不支持即时盘中买卖动作。"

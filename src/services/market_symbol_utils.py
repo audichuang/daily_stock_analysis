@@ -8,6 +8,7 @@ without introducing import cycles.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -147,3 +148,46 @@ def suffix_base_lookup_allowed(canonical_code: str) -> bool:
 def market_suffixes(market: str) -> tuple[str, ...]:
     spec = _MARKET_TO_SPEC.get((market or "").strip().lower())
     return spec.suffixes if spec else ()
+
+
+_CN_SUFFIXES = ("SH", "SS", "SZ", "BJ")
+_CN_PREFIXED_RE = re.compile(r"^(?:SH|SZ|BJ)[0-9]{6}$", re.ASCII)
+_HK_RE = re.compile(r"^(?:HK[0-9]{1,5}|[0-9]{1,5}\.HK|[0-9]{5})$", re.ASCII)
+_CN_BARE_RE = re.compile(r"^[0-9]{6}$", re.ASCII)
+_US_TICKER_RE = re.compile(r"^[A-Z]{1,5}(?:[.-][A-Z]{1,2})?$", re.ASCII)
+_MARKET_CURRENCY = {
+    "tw": "TWD",
+    "us": "USD",
+    "hk": "HKD",
+    "cn": "CNY",
+    "jp": "JPY",
+    "kr": "KRW",
+}
+
+
+def market_from_stock_code(stock_code: object) -> Optional[str]:
+    """由代號形狀判斷市場（tw/us/hk/cn/jp/kr）；判斷不了回 None，不猜。
+
+    後綴市場委派 `get_suffix_market`。裸 4 碼沒有市場語意（見根目錄 AGENTS.md §10），回 None。
+    """
+    code = str(stock_code or "").strip().upper()
+    if not code:
+        return None
+    suffix_market = get_suffix_market(code)
+    if suffix_market:
+        return suffix_market
+    if _HK_RE.match(code):
+        return "hk"
+    parts = split_suffix_symbol(code)
+    if parts is not None and parts[1] in _CN_SUFFIXES and _CN_BARE_RE.match(parts[0]):
+        return "cn"
+    if _CN_PREFIXED_RE.match(code) or _CN_BARE_RE.match(code):
+        return "cn"
+    if _US_TICKER_RE.match(code):
+        return "us"
+    return None
+
+
+def currency_for_stock_code(stock_code: object) -> Optional[str]:
+    """個股的交易幣別；判斷不了市場就回 None。指數沒有幣別，呼叫端自行排除。"""
+    return _MARKET_CURRENCY.get(market_from_stock_code(stock_code) or "")

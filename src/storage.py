@@ -3352,7 +3352,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         offset: int = 0,
-        limit: int = 20
+        limit: int = 20,
+        name_query: Optional[str] = None,
     ) -> Tuple[List[AnalysisHistory], int]:
         """
         分页查询分析历史记录（带总数）
@@ -3364,6 +3365,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             end_date: 结束日期（含）
             offset: 偏移量（跳过前 N 条）
             limit: 每页数量
+            name_query: 代號或名稱關鍵字（不分大小寫）
             
         Returns:
             Tuple[List[AnalysisHistory], int]: (记录列表, 总数)
@@ -3371,26 +3373,9 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         from sqlalchemy import func
         
         with self.get_session() as session:
-            conditions = []
-            
-            if code:
-                if isinstance(code, list):
-                    codes = [c for c in code if c]
-                    if codes:
-                        conditions.append(AnalysisHistory.code.in_(codes))
-                else:
-                    conditions.append(AnalysisHistory.code == code)
-            if report_type:
-                conditions.append(AnalysisHistory.report_type == report_type)
-            if start_date:
-                # created_at >= start_date 00:00:00
-                conditions.append(AnalysisHistory.created_at >= datetime.combine(start_date, datetime.min.time()))
-            if end_date:
-                # created_at < end_date+1 00:00:00 (即 <= end_date 23:59:59)
-                conditions.append(AnalysisHistory.created_at < datetime.combine(end_date + timedelta(days=1), datetime.min.time()))
-            
-            # 构建 where 子句
-            where_clause = and_(*conditions) if conditions else True
+            where_clause = self._analysis_history_where(
+                code, report_type, start_date, end_date, name_query
+            )
             
             # 查询总数
             total_query = select(func.count(AnalysisHistory.id)).where(where_clause)
@@ -3407,6 +3392,130 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             results = session.execute(data_query).scalars().all()
 
             return list(results), total
+
+    @staticmethod
+    def _analysis_history_where(
+        code: Optional[Union[str, List[str]]] = None,
+        report_type: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        name_query: Optional[str] = None,
+    ) -> Any:
+        conditions = []
+
+        if code:
+            if isinstance(code, list):
+                codes = [c for c in code if c]
+                if codes:
+                    conditions.append(AnalysisHistory.code.in_(codes))
+            else:
+                conditions.append(AnalysisHistory.code == code)
+        if report_type:
+            conditions.append(AnalysisHistory.report_type == report_type)
+        if start_date:
+            # created_at >= start_date 00:00:00
+            conditions.append(AnalysisHistory.created_at >= datetime.combine(start_date, datetime.min.time()))
+        if end_date:
+            # created_at < end_date+1 00:00:00 (即 <= end_date 23:59:59)
+            conditions.append(AnalysisHistory.created_at < datetime.combine(end_date + timedelta(days=1), datetime.min.time()))
+        keyword = (name_query or "").strip()
+        if keyword:
+            # 使用者輸入的 % 與 _ 是字面值，不是萬用字元。
+            escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            conditions.append(or_(
+                AnalysisHistory.code.ilike(pattern, escape="\\"),
+                AnalysisHistory.name.ilike(pattern, escape="\\"),
+            ))
+
+        return and_(*conditions) if conditions else True
+
+    def get_analysis_history_filter_rows(
+        self,
+        *,
+        code: Optional[Union[str, List[str]]] = None,
+        report_type: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        name_query: Optional[str] = None,
+        include_raw_result: bool = False,
+    ) -> List[Any]:
+        """只取篩選需要的欄位（新到舊）。
+
+        動作是由 raw_result 與評分算出來的，SQL 篩不了；這裡不載入 context_snapshot 這種大欄位，
+        比對完再用 get_analysis_history_by_ids 取當頁完整資料。
+        """
+        columns = [
+            AnalysisHistory.id,
+            AnalysisHistory.code,
+            AnalysisHistory.report_type,
+            AnalysisHistory.sentiment_score,
+            AnalysisHistory.operation_advice,
+        ]
+        if include_raw_result:
+            columns.append(AnalysisHistory.raw_result)
+        with self.get_session() as session:
+            query = (
+                select(*columns)
+                .where(self._analysis_history_where(code, report_type, start_date, end_date, name_query))
+                .order_by(desc(AnalysisHistory.created_at), desc(AnalysisHistory.id))
+            )
+            return list(session.execute(query).all())
+
+    def get_analysis_history_by_ids(self, record_ids: List[int]) -> List[AnalysisHistory]:
+        """依傳入順序回傳；查無的 id 略過。"""
+        if not record_ids:
+            return []
+        with self.get_session() as session:
+            rows = session.execute(
+                select(AnalysisHistory).where(AnalysisHistory.id.in_(record_ids))
+            ).scalars().all()
+        by_id = {row.id: row for row in rows}
+        return [by_id[record_id] for record_id in record_ids if record_id in by_id]
+
+    def count_analysis_history_by_kind(
+        self,
+        *,
+        code: Optional[Union[str, List[str]]] = None,
+        report_type: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        name_query: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """相同篩選條件下，個股報告與大盤複盤各幾筆。"""
+        from sqlalchemy import func
+
+        with self.get_session() as session:
+            rows = session.execute(
+                select(AnalysisHistory.report_type, func.count(AnalysisHistory.id))
+                .where(self._analysis_history_where(code, report_type, start_date, end_date, name_query))
+                .group_by(AnalysisHistory.report_type)
+            ).all()
+        market_review = sum(count for kind, count in rows if kind == "market_review")
+        stock = sum(count for kind, count in rows if kind != "market_review")
+        return {"stock": stock, "market_review": market_review}
+
+    def get_previous_analysis_history(
+        self,
+        codes: List[str],
+        *,
+        before_created_at: datetime,
+    ) -> Optional[AnalysisHistory]:
+        """取同一組代號在指定時間之前最新的一筆；沒有回 None。"""
+        codes = [code for code in codes if code]
+        if not codes:
+            return None
+        with self.get_session() as session:
+            query = (
+                select(AnalysisHistory)
+                .where(and_(
+                    AnalysisHistory.code.in_(codes),
+                    AnalysisHistory.created_at < before_created_at,
+                ))
+                .order_by(desc(AnalysisHistory.created_at), desc(AnalysisHistory.id))
+                .limit(1)
+            )
+            return session.execute(query).scalars().first()
 
     def get_analysis_counts_by_code(
         self, codes: Optional[List[str]] = None

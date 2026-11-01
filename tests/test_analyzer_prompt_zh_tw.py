@@ -86,7 +86,7 @@ def test_zh_tw_audit_markers_match_the_prompt_headers():
 def test_tw_stock_amounts_follow_market_currency_and_language():
     # zh-TW 台股：币别跟着市场走（新台币）；en：英文量级、无中文。
     zh_tw = _prompt("zh-TW", code="2330.TW")
-    assert "9.88 亿新台币" in zh_tw
+    assert "9.88 億新台幣" in zh_tw
     assert "### 台股交易成本（給價位前必須扣除）" in zh_tw
     assert "正常波動（ATR14）約 2.50%" in zh_tw
     en = _prompt("en", code="2330.TW")
@@ -99,7 +99,7 @@ def test_tw_stock_amounts_follow_market_currency_and_language():
 def test_format_amount_takes_market_before_language():
     analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
     assert analyzer._format_amount(1e9, "tw") == "10.00 亿新台币"
-    assert analyzer._format_amount(1e9, "tw", "zh-TW") == "10.00 亿新台币"
+    assert analyzer._format_amount(1e9, "tw", "zh-TW") == "10.00 億新台幣"
     assert analyzer._format_amount(1e9, "us", "en") == "1.00B"
 
 
@@ -153,3 +153,43 @@ def test_sell_sniper_and_cost_rules_route_waiting_price_to_watch_conditions():
     assert "put the lower entry to wait for in `dashboard.phase_decision.watch_conditions`" in en
     assert "name the lower entry to wait for" not in en
     assert _cjk_chars(en) == ""
+
+
+# 模板本體常見的簡體字；任何一個出現在 zh-TW 系統提示詞都表示語言分流失效。
+_SIMPLIFIED_SAMPLE = "决仪盘数据买卖减仓观风险资讯评级预设处层总结"
+
+
+def _system_prompt(language: str, *, legacy: bool) -> str:
+    return _make_analyzer(legacy=legacy)._get_analysis_system_prompt(language, stock_code="2330.TW")
+
+
+def test_zh_tw_system_prompt_body_is_traditional():
+    for legacy in (True, False):
+        prompt = _system_prompt("zh-TW", legacy=legacy)
+        leftovers = sorted(set(prompt) & set(_SIMPLIFIED_SAMPLE))
+        assert leftovers == [], leftovers
+        assert "決策儀表盤" in prompt
+        assert "減碼" in prompt and "停損" in prompt
+        assert "買進、加碼、續抱" in prompt  # 詞彙表
+        assert "買入、加倉、持有、減倉" in prompt  # 詞彙表的「不要寫」
+
+
+def test_other_language_system_prompts_are_not_converted():
+    for legacy in (True, False):
+        zh = _system_prompt("zh", legacy=legacy)
+        assert "决策仪表盘" in zh and "決策儀表盤" not in zh
+        assert "用語（繁體中文報告必須遵守）" not in zh
+        for language in ("en", "ko"):
+            other = _system_prompt(language, legacy=legacy)
+            assert "Decision Dashboard" in other
+            assert "用語（繁體中文報告必須遵守）" not in other
+
+
+def test_system_prompt_scopes_summary_and_splits_watch_conditions():
+    zh_tw = _system_prompt("zh-TW", legacy=False)
+    for key in ("entry_conditions", "exit_triggers", "pending_events", "watch_conditions"):
+        assert f'"{key}"' in zh_tw
+        assert f'"{key}"' in _system_prompt("en", legacy=False)
+    assert "不得出現“依規則”“判定為”" in zh_tw
+    assert "不引用任何評分數字" in zh_tw
+    assert "100字綜合分析摘要" not in zh_tw

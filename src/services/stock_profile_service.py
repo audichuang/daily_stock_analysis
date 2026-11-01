@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from data_provider.base import canonical_stock_code
-from src.analysis_context_pack_overview import extract_analysis_context_pack_overview
 from src.repositories.portfolio_repo import PortfolioRepository
 from src.core.trading_calendar import latest_opened_session
 from src.services.alert_service import AlertService
@@ -15,13 +14,9 @@ from src.services.event_outlook import extract_event_outlook
 from src.services.history_service import HistoryService
 from src.services.intelligence_service import IntelligenceService
 from src.services.market_symbol_utils import get_suffix_market
-from src.services.research_artifact_service import build_research_artifact
+from src.services.research_artifact_service import artifact_input_from_detail, build_research_artifact
 from src.services.stock_code_utils import resolve_daily_stock_identity
 from src.services.stock_service import StockService
-from src.utils.data_processing import (
-    extract_fundamental_detail_fields,
-    extract_market_structure_detail_field,
-)
 
 _BLOCK_NAMES = ("quote", "history", "research", "intelligence", "portfolio", "monitors")
 
@@ -397,17 +392,6 @@ class StockProfileService:
         return aliases
 
     def _artifact_input(self, detail: Dict[str, Any]) -> Dict[str, Any]:
-        context_snapshot = detail.get("context_snapshot")
-        raw_result = detail.get("raw_result")
-        raw_fundamental = (
-            raw_result.get("fundamental_context") or raw_result
-            if isinstance(raw_result, dict)
-            else None
-        )
-        extracted_fundamental = extract_fundamental_detail_fields(
-            context_snapshot,
-            raw_fundamental,
-        )
         try:
             persisted_fundamental = self._history_service().get_latest_fundamental_snapshot(
                 query_id=str(detail.get("query_id") or "").strip(),
@@ -417,50 +401,7 @@ class StockProfileService:
             )
         except Exception:
             persisted_fundamental = None
-        persisted_fields = extract_fundamental_detail_fields(
-            None,
-            persisted_fundamental,
-        )
-        context_overview = extract_analysis_context_pack_overview(context_snapshot)
-        market_structure = extract_market_structure_detail_field(
-            context_snapshot,
-            raw_result,
-        )
-        return {
-            "meta": {
-                "id": detail.get("id"),
-                "query_id": detail.get("query_id"),
-                "stock_code": detail.get("stock_code"),
-                "stock_name": detail.get("stock_name"),
-                "created_at": detail.get("created_at"),
-            },
-            "summary": {
-                "analysis_summary": detail.get("analysis_summary"),
-                "operation_advice": detail.get("operation_advice"),
-                "action": detail.get("action"),
-                "action_label": detail.get("action_label"),
-                "trend_prediction": detail.get("trend_prediction"),
-                "sentiment_score": detail.get("sentiment_score"),
-            },
-            "strategy": {
-                "ideal_buy": detail.get("ideal_buy"),
-                "secondary_buy": detail.get("secondary_buy"),
-                "stop_loss": detail.get("stop_loss"),
-                "take_profit": detail.get("take_profit"),
-            },
-            "details": {
-                "news_content": detail.get("news_content"),
-                "empty_news_disclosure": detail.get("empty_news_disclosure"),
-                "analysis_context_pack_overview": context_overview,
-                "financial_report": detail.get("financial_report")
-                or extracted_fundamental.get("financial_report")
-                or persisted_fields.get("financial_report"),
-                "dividend_metrics": detail.get("dividend_metrics")
-                or extracted_fundamental.get("dividend_metrics")
-                or persisted_fields.get("dividend_metrics"),
-                "market_structure": detail.get("market_structure") or market_structure,
-            },
-        }
+        return artifact_input_from_detail(detail, persisted_fundamental=persisted_fundamental)
 
     def _stock_service(self) -> StockService:
         if self.stock_service is None:

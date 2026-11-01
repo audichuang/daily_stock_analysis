@@ -75,3 +75,30 @@ class HistoryNewsFallbackTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NewsSnippetCleaningTestCase(unittest.TestCase):
+    def test_removes_disclaimer_and_quote_template_only(self) -> None:
+        from src.services.history_service import clean_news_snippet
+
+        self.assertEqual(
+            clean_news_snippet("公司上修財測。本文僅供參考，不構成投資建議。"),
+            "公司上修財測。",
+        )
+        self.assertEqual(clean_news_snippet("价格: 100 USD\n涨跌: up 2%\n法說會釋出利多。"), "法說會釋出利多。")
+        self.assertEqual(clean_news_snippet("Disclaimer: for informational purposes only."), "")
+
+    def test_clean_text_is_returned_byte_for_byte(self) -> None:
+        # 反向：沒有樣板的摘要不能被斷句重組改掉。
+        from src.services.history_service import clean_news_snippet
+
+        text = "營收成長 20%，  毛利率持平\n下半年看法不變"
+        self.assertEqual(clean_news_snippet(text), text)
+
+    def test_key_point_is_traditional_first_sentence_and_skips_foreign_text(self) -> None:
+        from src.services.history_service import news_key_point
+
+        self.assertEqual(news_key_point("公司发布财报。下半年持平。"), "公司發布財報。")
+        self.assertIsNone(news_key_point("Apple beats estimates."))
+        self.assertIsNone(news_key_point(""))
+        self.assertEqual(len(news_key_point("长" * 200)), 80)

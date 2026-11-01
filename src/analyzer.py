@@ -88,11 +88,13 @@ from src.report_language import (
     is_chip_placeholder_value,
     localize_chip_health,
     localize_confidence_level,
+    ZH_TW_PROMPT_GLOSSARY,
     localize_operation_advice,
     localize_trend_prediction,
     normalize_report_language,
 )
 from src.schemas.decision_action import build_action_fields, decision_type_for_action
+from src.utils.zh_s2t import localize_template, to_traditional
 from src.schemas.decision_scale import (
     CANONICAL_DECISION_SCALE_PROMPT_EN,
     CANONICAL_DECISION_SCALE_PROMPT_ZH,
@@ -2553,6 +2555,9 @@ class GeminiAnalyzer(LLMClient):
             "action_window": "盘前计划/盘中跟踪/午间确认/收盘前风控/盘后复盘/非交易日观察",
             "immediate_action": "立即行动/等待确认/观察/止损止盈预警/禁止追高/无盘中动作",
             "watch_conditions": ["观察条件1", "观察条件2"],
+            "entry_conditions": ["空手者的进场条件，含价位；没有就给空数组"],
+            "exit_triggers": ["持股者的出场或改判条件，含价位；没有就给空数组"],
+            "pending_events": ["待确认的事件与日期；没有就给空数组"],
             "next_check_time": "下一次检查点或市场本地时间",
             "confidence_reason": "置信度理由，说明阶段和数据质量限制",
             "data_limitations": ["阶段或数据质量限制1", "阶段或数据质量限制2"]
@@ -2568,7 +2573,7 @@ class GeminiAnalyzer(LLMClient):
         }
     },
 
-    "analysis_summary": "100字综合分析摘要",
+    "analysis_summary": "100字摘要，只写发生什么、为何发生、与前次的差异；操作建议写在 one_sentence 与 position_advice，这里不重复；不得出现“依规则”“判定为”“持股者”“空手者”，不引用任何评分数字",
     "key_points": "3-5个核心看点，逗号分隔",
     "risk_warning": "风险提示",
     "buy_reason": "操作理由，引用交易理念",
@@ -2747,6 +2752,9 @@ class GeminiAnalyzer(LLMClient):
             "action_window": "盘前计划/盘中跟踪/午间确认/收盘前风控/盘后复盘/非交易日观察",
             "immediate_action": "立即行动/等待确认/观察/止损止盈预警/禁止追高/无盘中动作",
             "watch_conditions": ["观察条件1", "观察条件2"],
+            "entry_conditions": ["空手者的进场条件，含价位；没有就给空数组"],
+            "exit_triggers": ["持股者的出场或改判条件，含价位；没有就给空数组"],
+            "pending_events": ["待确认的事件与日期；没有就给空数组"],
             "next_check_time": "下一次检查点或市场本地时间",
             "confidence_reason": "置信度理由，说明阶段和数据质量限制",
             "data_limitations": ["阶段或数据质量限制1", "阶段或数据质量限制2"]
@@ -2762,7 +2770,7 @@ class GeminiAnalyzer(LLMClient):
         }
     },
 
-    "analysis_summary": "100字综合分析摘要",
+    "analysis_summary": "100字摘要，只写发生什么、为何发生、与前次的差异；操作建议写在 one_sentence 与 position_advice，这里不重复；不得出现“依规则”“判定为”“持股者”“空手者”，不引用任何评分数字",
     "key_points": "3-5个核心看点，逗号分隔",
     "risk_warning": "风险提示",
     "buy_reason": "操作理由，引用激活技能或风险框架",
@@ -2910,6 +2918,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             "action_window": "Pre-market plan/Intraday tracking/Midday confirmation/Pre-close risk control/Post-market review/Non-trading-day watch",
             "immediate_action": "Act now/Wait for confirmation/Watch/Stop-loss or take-profit alert/Do not chase/No intraday action",
             "watch_conditions": ["Watch condition 1", "Watch condition 2"],
+            "entry_conditions": ["Entry conditions for non-holders, with prices; empty array if none"],
+            "exit_triggers": ["Exit or re-rating conditions for holders, with prices; empty array if none"],
+            "pending_events": ["Events still to be confirmed, with dates; empty array if none"],
             "next_check_time": "Next checkpoint or market-local time",
             "confidence_reason": "Reason for the confidence level, including phase and data-quality limits",
             "data_limitations": ["Phase or data-quality limitation 1", "Phase or data-quality limitation 2"]
@@ -2925,7 +2936,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         }
     },
 
-    "analysis_summary": "Overall analysis summary (about 100 words)",
+    "analysis_summary": "About 100 words: only what happened, why, and what changed since the last report. Advice belongs in one_sentence and position_advice, not here. Do not write \"per the rules\", \"classified as\", \"holders\" or \"non-holders\", and do not quote any score",
     "key_points": "3-5 key points, comma separated",
     "risk_warning": "Risk warning",
     "buy_reason": "BUY_REASON_PLACEHOLDER",
@@ -3307,6 +3318,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             base_prompt = _apply_tw_ma_weighted_system_rules(
                 base_prompt, getattr(self._get_runtime_config(), "bias_threshold", 5.0)
             )
+        if lang == "zh-TW":
+            # 上游模板是簡體，本體語言會壓過語言指令；放在台股均線規則的字串替換之後，那段比對的是簡體原句。
+            base_prompt = to_traditional(base_prompt) + ZH_TW_PROMPT_GLOSSARY
         if lang == "en":
             return base_prompt + """
 
@@ -5917,10 +5931,11 @@ Output the complete Decision Dashboard in JSON format."""
             return 'N/A'
         if normalize_report_language(report_language) in ("en", "ko"):
             return f"{self._format_scaled_number_en(volume)} shares"
+        language = normalize_report_language(report_language)
         if volume >= 1e8:
-            return f"{volume / 1e8:.2f} 亿股"
+            return localize_template(f"{volume / 1e8:.2f} 亿股", language)
         elif volume >= 1e4:
-            return f"{volume / 1e4:.2f} 万股"
+            return localize_template(f"{volume / 1e4:.2f} 万股", language)
         else:
             return f"{volume:.0f} 股"
 
@@ -5957,11 +5972,12 @@ Output the complete Decision Dashboard in JSON format."""
         sign = '-' if amount < 0 else ''
         magnitude = abs(amount)
         if magnitude >= 1e8:
-            return f"{sign}{magnitude / 1e8:.2f} 亿{currency}"
+            text = f"{sign}{magnitude / 1e8:.2f} 亿{currency}"
         elif magnitude >= 1e4:
-            return f"{sign}{magnitude / 1e4:.2f} 万{currency}"
+            text = f"{sign}{magnitude / 1e4:.2f} 万{currency}"
         else:
-            return f"{sign}{magnitude:.0f} {currency}"
+            text = f"{sign}{magnitude:.0f} {currency}"
+        return localize_template(text, normalize_report_language(report_language))
 
     @staticmethod
     def _format_scaled_number_en(value: float) -> str:
@@ -6099,7 +6115,7 @@ Output the complete Decision Dashboard in JSON format."""
             if f == "sentiment_score":
                 lines.append(L("- sentiment_score: 0-100 綜合評分", "- sentiment_score: 0-100 综合评分"))
             elif f == "operation_advice":
-                lines.append(L("- operation_advice: 買入/加倉/持有/減倉/賣出/觀望", "- operation_advice: 买入/加仓/持有/减仓/卖出/观望"))
+                lines.append(L("- operation_advice: 買進/加碼/續抱/減碼/賣出/觀望", "- operation_advice: 买入/加仓/持有/减仓/卖出/观望"))
             elif f == "analysis_summary":
                 lines.append(L("- analysis_summary: 綜合分析摘要", "- analysis_summary: 综合分析摘要"))
             elif f == "dashboard.core_conclusion.one_sentence":

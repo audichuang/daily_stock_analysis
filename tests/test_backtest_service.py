@@ -3384,7 +3384,7 @@ class BacktestResultDashboardGuardrailTestCase(unittest.TestCase):
             with self.subTest(dashboard=dashboard):
                 self.assertEqual(
                     self._action(decision_type="hold", advice="洗盤觀察", action="hold", dashboard=dashboard),
-                    ("buy", "買入"),
+                    ("buy", "買進"),
                 )
 
 

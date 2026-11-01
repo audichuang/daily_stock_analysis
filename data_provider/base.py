@@ -3661,6 +3661,15 @@ class DataFetcherManager:
         logger.warning("[MarketStats] component=market_stats action=complete status=empty purpose=%s", purpose)
         return {}
 
+    @staticmethod
+    def _evidence_source_status(payload: Any, error: Optional[str]) -> str:
+        """把一次補充來源呼叫的結果收斂成固定狀態碼。"""
+        if payload:
+            return "ok"
+        if error:
+            return "timeout" if "timeout" in str(error).lower() else "fetch_failed"
+        return "no_data"
+
     def _run_with_timeout(
         self,
         task: Callable[[], Any],
@@ -4357,8 +4366,14 @@ class DataFetcherManager:
         # 補充證據與核心區塊分離；每次請求都扣剩餘預算，失敗不丟棄其他讀數。
         if market == "us":
             evidence = dict(bundle_payload.get("us_evidence") or {})
+            # 每個來源記一次結果：缺資料與抓失敗在畫面上要能分開講。
+            source_status: Dict[str, str] = {}
             user_agent = getattr(config, "sec_edgar_user_agent", "")
             timeout = max(stage_timeout - (time.time() - start_ts), 0.0)
+            if not user_agent:
+                source_status["sec_finra"] = "not_configured"
+            elif timeout <= 0:
+                source_status["sec_finra"] = "timeout"
             if user_agent and timeout > 0:
                 from .sec_edgar import SecEdgarClient
                 deadline = time.monotonic() + timeout
@@ -4367,6 +4382,7 @@ class DataFetcherManager:
                         stock_code, deadline=deadline - min(.1, timeout / 10)),
                     timeout, "us_evidence_sec_finra", quarantine_key=("sec_finra", "us_evidence"),
                 )
+                source_status["sec_finra"] = self._evidence_source_status(payload, error)
                 if payload:
                     evidence.update(payload)
                 if error:
@@ -4374,27 +4390,38 @@ class DataFetcherManager:
             for kind, key in (("insider", "insider_90d"), ("ratings", "ratings_30d")):
                 timeout = min(fetch_timeout, max(stage_timeout - (time.time() - start_ts), 0.0))
                 if timeout <= 0:
-                    break
+                    source_status[kind] = "timeout"
+                    continue
                 payload, error, _ = self._run_with_timeout(
                     lambda kind=kind: self._yfinance_fundamental_adapter.get_us_activity_evidence(stock_code, kind),
                     timeout, "us_evidence_" + kind, quarantine_key=("yfinance", "us_evidence_" + kind),
                 )
+                source_status[kind] = self._evidence_source_status(payload, error)
                 if payload:
                     evidence[key] = payload
                 if error:
                     result_ctx["errors"].append(error)
             timeout = min(fetch_timeout, max(stage_timeout - (time.time() - start_ts), 0.0))
+            if getattr(config, "event_outlook_enabled", False) is not True:
+                source_status["estimates"] = "not_configured"
+            elif timeout <= 0:
+                source_status["estimates"] = "timeout"
             if getattr(config, "event_outlook_enabled", False) is True and timeout > 0:
                 payload, error, _ = self._run_with_timeout(
                     lambda: self._yfinance_fundamental_adapter.get_us_estimate_evidence(stock_code),
                     timeout, "us_evidence_estimates", quarantine_key=("yfinance", "us_evidence_estimates"),
                 )
+                source_status["estimates"] = self._evidence_source_status(payload, error)
                 if payload:
                     evidence["estimates"] = payload
                 if error:
                     result_ctx["errors"].append(error)
             from .futu_fetcher import FutuFetcher
             timeout = min(fetch_timeout, max(stage_timeout - (time.time() - start_ts), 0.0))
+            if not FutuFetcher.has_configured_endpoint():
+                source_status["futu"] = "not_configured"
+            elif timeout <= 0:
+                source_status["futu"] = "timeout"
             if FutuFetcher.has_configured_endpoint() and timeout > 0:
                 if getattr(self, "_us_futu_fetcher", None) is None:
                     self._us_futu_fetcher = FutuFetcher()
@@ -4403,12 +4430,14 @@ class DataFetcherManager:
                     lambda: self._us_futu_fetcher.get_us_evidence(stock_code, deadline=deadline),
                     timeout, "us_evidence_futu", quarantine_key=("futu", "us_evidence"),
                 )
+                source_status["futu"] = self._evidence_source_status(payload, error)
                 if payload:
                     evidence["futu"] = payload
                 if error:
                     result_ctx["errors"].append(error)
             if evidence:
                 result_ctx["us_evidence"] = evidence
+            result_ctx["us_evidence_status"] = source_status
 
         bundle_chain = self._normalize_source_chain(
             bundle_payload.get("source_chain", []),

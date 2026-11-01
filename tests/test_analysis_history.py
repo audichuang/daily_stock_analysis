@@ -52,6 +52,254 @@ from src.services.history_service import HistoryService
 import src.auth as auth
 
 
+class TestHistoryStructuredReportHelper(unittest.TestCase):
+    """B01：/history/{id} 的 structured_report 建構得出來才給，失敗維持 null。"""
+
+    def test_market_review_has_no_structured_report(self):
+        from api.v1.endpoints.history import _structured_report_for_detail
+
+        self.assertIsNone(_structured_report_for_detail({"report_type": "market_review", "id": 1}, None))
+
+    def test_builds_artifact_for_stock_report(self):
+        from api.v1.endpoints.history import _structured_report_for_detail
+
+        artifact = _structured_report_for_detail(
+            {"id": 9, "query_id": "q", "stock_code": "AAPL", "report_type": "simple", "analysis_summary": "s"},
+            None,
+        )
+        self.assertEqual(artifact["artifact_id"], "report:9")
+
+    def test_build_failure_stays_null(self):
+        from api.v1.endpoints import history as history_endpoint
+
+        with patch.object(history_endpoint, "build_research_artifact", side_effect=ValueError("old report")):
+            self.assertIsNone(
+                history_endpoint._structured_report_for_detail({"id": 9, "stock_code": "AAPL"}, None)
+            )
+
+
+class TestReportDecisionFields(unittest.TestCase):
+    """B02：決策欄位只讀結構化鍵，缺值回 None，不補近似值。"""
+
+    RAW = {
+        "confidence_level": "高",
+        "dashboard": {
+            "core_conclusion": {
+                "one_sentence": "財測重挫",
+                "time_sensitivity": "今日內",
+                "position_advice": {"no_position": "不接刀", "has_position": "反彈減碼"},
+            },
+            "phase_decision": {
+                "watch_conditions": ["站回 70"],
+                "entry_conditions": ["放量站回 70"],
+                "exit_triggers": ["跌破 60"],
+                "pending_events": ["法說會"],
+                "next_check_time": "明日開盤",
+                "confidence_reason": "資料完整",
+            },
+            "signal_attribution": {
+                "strongest_bullish_signal": "RSI 超賣",
+                "strongest_bearish_signal": "空頭排列",
+            },
+            "decision_score_calibration": {"guardrail_reason": "大盤轉弱"},
+            "data_perspective": {"price_position": {"current_price": "65.76"}},
+        },
+    }
+
+    def test_projects_structured_keys(self):
+        from src.services.report_decision_fields import extract_report_decision_fields
+
+        fields = extract_report_decision_fields(self.RAW, "zh-TW")
+        self.assertEqual(fields["one_sentence"], "財測重挫")
+        self.assertEqual(fields["position_advice"]["has_position"], "反彈減碼")
+        self.assertEqual(fields["exit_triggers"], ["跌破 60"])
+        self.assertEqual(fields["strongest_bearish_signal"], "空頭排列")
+        self.assertIs(fields["guardrail_applied"], True)
+        self.assertEqual(fields["guardrail_reason"], "大盤轉弱")
+
+    def test_market_review_guardrail_is_not_applicable(self):
+        from src.services.report_decision_fields import extract_report_decision_fields
+
+        fields = extract_report_decision_fields({"raw_response": "複盤"}, "zh-TW")
+        self.assertIsNone(fields["guardrail_applied"])
+        self.assertIsNone(fields["one_sentence"])
+
+    def test_old_report_keeps_split_conditions_null_not_empty(self):
+        from src.services.report_decision_fields import extract_report_decision_fields
+
+        fields = extract_report_decision_fields(
+            {"dashboard": {"phase_decision": {"watch_conditions": []}}}, "zh-TW"
+        )
+        self.assertEqual(fields["watch_conditions"], [])
+        self.assertIsNone(fields["entry_conditions"])
+
+    def test_price_fields_fall_back_to_dashboard_and_derive_change(self):
+        from src.services.report_decision_fields import extract_report_price_fields
+
+        fields = extract_report_price_fields(
+            {"enhanced_context": {"today": {"date": "2026-10-30"}, "realtime": {"fetched_at": "T"}}},
+            self.RAW,
+            current_price=None,
+            change_pct=-28.58,
+        )
+        self.assertEqual(fields["current_price"], 65.76)
+        self.assertEqual(fields["price_date"], "2026-10-30")
+        self.assertEqual(fields["price_fetched_at"], "T")
+        self.assertAlmostEqual(fields["change_amount"], 65.76 - 65.76 / (1 - 0.2858), places=3)
+
+    def test_flat_day_change_is_zero_and_missing_inputs_are_null(self):
+        from src.services.report_decision_fields import derive_change_amount
+
+        self.assertEqual(derive_change_amount(100.0, 0.0), 0.0)
+        self.assertIsNone(derive_change_amount(None, 1.0))
+        self.assertIsNone(derive_change_amount(100.0, None))
+        self.assertIsNone(derive_change_amount(100.0, -100.0))
+
+    def test_price_date_is_absent_when_no_source(self):
+        from src.services.report_decision_fields import extract_report_price_fields
+
+        self.assertIsNone(extract_report_price_fields({"enhanced_context": {}}, {})["price_date"])
+
+    def test_currency_follows_code_shape(self):
+        from src.services.market_symbol_utils import currency_for_stock_code, market_from_stock_code
+
+        for code, currency in (
+            ("2330.TW", "TWD"), ("00631L.TW", "TWD"), ("6488.TWO", "TWD"), ("AAPL", "USD"), ("BRK.B", "USD"),
+            ("HK00700", "HKD"), ("00700.HK", "HKD"), ("600519", "CNY"), ("600519.SH", "CNY"),
+            ("7203.T", "JPY"), ("005930.KS", "KRW"),
+        ):
+            self.assertEqual(currency_for_stock_code(code), currency, code)
+        # 裸 4 碼與大盤複盤不猜
+        self.assertIsNone(market_from_stock_code("2330"))
+        self.assertIsNone(market_from_stock_code("MARKET"))
+        self.assertIsNone(market_from_stock_code(None))
+
+
+class TestHeldForReport(unittest.TestCase):
+    def test_held_is_null_when_portfolio_is_unavailable(self):
+        from api.v1.endpoints.history import _held_for_report
+        from src.services import stock_profile_service as module
+
+        with patch.object(
+            module.StockProfileService,
+            "_portfolio_block",
+            return_value={"status": "unavailable", "data": {"held": False}},
+        ):
+            self.assertIsNone(_held_for_report({"stock_code": "AAPL"}, MagicMock()))
+
+    def test_held_reports_portfolio_answer(self):
+        from api.v1.endpoints.history import _held_for_report
+        from src.services import stock_profile_service as module
+
+        for held in (True, False):
+            with patch.object(
+                module.StockProfileService,
+                "_portfolio_block",
+                return_value={"status": "partial", "data": {"held": held}},
+            ):
+                self.assertIs(_held_for_report({"stock_code": "AAPL"}, MagicMock()), held)
+
+    def test_market_review_has_no_held(self):
+        from api.v1.endpoints.history import _held_for_report
+
+        self.assertIsNone(_held_for_report({"report_type": "market_review"}, MagicMock()))
+
+
+class TestHistoryLibraryFilters(unittest.TestCase):
+    """B06：q、market、action 與個股／大盤分開的總數，用真的 SQLite 跑查詢。"""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self._original_env = {key: os.environ.get(key) for key in ("ENV_FILE", "DATABASE_PATH")}
+        env_path = os.path.join(self._temp_dir.name, ".env")
+        with open(env_path, "w", encoding="utf-8") as env_file:
+            env_file.write("STOCK_LIST=600519\n")
+        os.environ["ENV_FILE"] = env_path
+        os.environ["DATABASE_PATH"] = os.path.join(self._temp_dir.name, "library.db")
+        Config.reset_instance()
+        DatabaseManager.reset_instance()
+        self.db = DatabaseManager.get_instance()
+        rows = [
+            ("2330.TW", "台積電", "simple", 72, "買入", {"action": "buy", "dashboard": {"core_conclusion": {"one_sentence": "買進訊號"}}}),
+            ("6488.TWO", "環球晶", "simple", 30, "減倉", {"action": "reduce"}),
+            ("AAPL", "Apple Inc", "simple", 50, "觀望", {"action": "watch"}),
+            ("TSLA", "百分%比_測試", "simple", 50, "觀望", {"action": "watch"}),
+            ("MARKET", "大盤複盤", "market_review", None, None, {"raw_response": "複盤"}),
+        ]
+        with self.db.get_session() as session:
+            for code, name, report_type, score, advice, raw in rows:
+                session.add(AnalysisHistory(
+                    query_id=f"q-{code}", code=code, name=name, report_type=report_type,
+                    sentiment_score=score, operation_advice=advice, raw_result=json.dumps(raw, ensure_ascii=False),
+                    created_at=datetime.now(),
+                ))
+            session.commit()
+        self.service = HistoryService(self.db)
+
+    def tearDown(self) -> None:
+        DatabaseManager.reset_instance()
+        Config.reset_instance()
+        for key, value in self._original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self._temp_dir.cleanup()
+
+    def _codes(self, **filters):
+        result = self.service.get_history_list(page=1, limit=20, **filters)
+        return sorted(item["stock_code"] for item in result["items"]), result
+
+    def test_q_matches_code_and_name_case_insensitively(self):
+        self.assertEqual(self._codes(q="aapl")[0], ["AAPL"])
+        self.assertEqual(self._codes(q="台積")[0], ["2330.TW"])
+
+    def test_q_treats_wildcards_literally(self):
+        self.assertEqual(self._codes(q="%")[0], ["TSLA"])
+        self.assertEqual(self._codes(q="_")[0], ["TSLA"])
+
+    def test_market_filter_excludes_other_markets_and_market_review(self):
+        codes, result = self._codes(market="tw")
+        self.assertEqual(codes, ["2330.TW", "6488.TWO"])
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(result["stock_total"], 2)
+        self.assertEqual(result["market_review_total"], 0)
+
+    def test_action_filter_uses_structured_action_not_stored_label(self):
+        codes, result = self._codes(action="reduce")
+        self.assertEqual(codes, ["6488.TWO"])
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(self._codes(action="buy", market="us")[0], [])
+
+    def test_unknown_action_returns_empty(self):
+        codes, result = self._codes(action="moon")
+        self.assertEqual(codes, [])
+        self.assertEqual(result["total"], 0)
+
+    def test_total_counts_all_matches_not_just_the_page(self):
+        result = self.service.get_history_list(page=1, limit=1, market="tw")
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(result["total"], 2)
+
+    def test_kind_totals_follow_same_filters(self):
+        self.assertEqual(self.service.get_history_kind_totals(), {"stock": 4, "market_review": 1})
+        self.assertEqual(self.service.get_history_kind_totals(q="台積"), {"stock": 1, "market_review": 0})
+
+    def test_list_item_one_sentence(self):
+        items = {item["stock_code"]: item for item in self.service.get_history_list(page=1, limit=20)["items"]}
+        self.assertEqual(items["2330.TW"]["one_sentence"], "買進訊號")
+        self.assertIsNone(items["MARKET"]["one_sentence"])
+
+    def test_endpoint_keeps_total_and_adds_kind_totals(self):
+        response = get_history_list(
+            stock_code=None, report_type=None, start_date=None, end_date=None,
+            page=1, limit=20, q=None, market=None, action=None, db_manager=self.db,
+        )
+        self.assertEqual(response.total, 5)
+        self.assertEqual(response.stock_total, 4)
+        self.assertEqual(response.market_review_total, 1)
+
+
 class TestHistoryCsiCandidateConvergence(unittest.TestCase):
     """PR #2267 review remediation: registered CSI explicit identities must
     converge in history filter candidates so a record saved under any

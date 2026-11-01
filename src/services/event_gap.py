@@ -181,6 +181,9 @@ def apply_event_gap_guard(result, event, report_language):
             phase["immediate_action"] = reason
             phase["confidence_reason"] = reason
             phase["watch_conditions"] = [reason]
+            # 不下買賣結論時，模型原先寫的進出場條件也是交易指令，不能殘留。
+            phase["entry_conditions"] = []
+            phase["exit_triggers"] = []
         result.dashboard = dashboard
     if not isinstance(result.dashboard, dict):
         result.dashboard = {}
