@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [chore] 測試會讀的 5 份 md（PR 範本、`docs/realtime-board.md`、`docs/tw-level-alerts.md`、`dsa-upstream-sync` 與 `tw-morning-call` 兩個 skill）列入 CI 的契約文件，只改它們也會跑後端；新增掃描測試，之後有測試開始讀新的 md 卻沒列入就會紅。
 - [chore] CI 只改 `journal/`（排程自動寫的決策日誌）或 `apps/dsa-ios/` 時不再跑 4 片後端測試；最近一週 `develop` 上 132 個 commit 有 27 個只改 journal、9 個只改 iOS 與文件。
 - [chore] CI 從 ttnas 搬到 ubuntu 工作站的 10 個自架 runner（label `ubuntu-desktop`，綁 P 核、`/tmp` 用 tmpfs）；3 個 run 同時跑時整輪約從 10–14 分降到 6–8 分。runner 文件改名為 `docs/ci-self-hosted-runner.md`，補上主機實測比較。
 - [改進] 問股辨識股名時先以子字串過濾再做 regex，不再每則訊息替數萬個名稱各編一次 regex（每則省約 1 秒）；後端離線測試總耗時約減半，CI 分片耗時表同步重算。
