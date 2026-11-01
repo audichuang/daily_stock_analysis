@@ -28,6 +28,7 @@ import {
 import { WEB_BUILD_INFO } from '../utils/constants';
 import { parseStockListValue } from '../utils/stockList';
 import { getCategoryDescription, getCategoryTitle } from '../utils/systemConfigI18n';
+import { getSetupCheckMessage, getSetupCheckTitle } from '../utils/setupCheckText';
 import { getIntlLocale } from '../i18n/intlLocale';
 import type {
   ConfigValidationIssue,
@@ -202,6 +203,7 @@ type FirstRunSetupCardProps = {
   onEditStockList: () => void;
   onRunSmoke: () => void | Promise<void>;
   listSeparator: string;
+  language: UiLanguage;
   t: (key: UiTextKey, params?: Record<string, string | number>) => string;
 };
 
@@ -219,6 +221,7 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
   onEditStockList,
   onRunSmoke,
   listSeparator,
+  language,
   t,
 }) => {
   const [isHidden, setIsHidden] = useState(false);
@@ -239,7 +242,7 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
     : requiredMissing.length
       ? t('settings.setupGuideMissingSummary', {
         count: requiredMissing.length,
-        labels: requiredMissing.slice(0, 3).map((check) => check.title).join(listSeparator),
+        labels: requiredMissing.slice(0, 3).map((check) => getSetupCheckTitle(check, language)).join(listSeparator),
       })
       : t('settings.setupGuideReadySummary');
 
@@ -310,12 +313,12 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
                   {getSetupCheckIcon(check)}
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-sm font-semibold text-foreground">{check.title}</p>
+                      <p className="text-sm font-semibold text-foreground">{getSetupCheckTitle(check, language)}</p>
                       <span className="rounded-full border settings-border bg-background/60 px-2 py-0.5 text-[11px] font-medium text-muted-text">
                         {getSetupCheckStatusLabel(check, t)}
                       </span>
                     </div>
-                    <p className="mt-1 text-xs leading-5 text-muted-text">{check.message}</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-text">{getSetupCheckMessage(check, t)}</p>
                     {check.nextStep ? (
                       <p className="mt-2 text-xs leading-5 text-secondary-text">{check.nextStep}</p>
                     ) : null}
@@ -1378,6 +1381,7 @@ const SettingsPage: React.FC = () => {
                 onEditStockList={handleEditSetupStockList}
                 onRunSmoke={handleRunSetupSmoke}
                 listSeparator={uiLanguage === 'en' ? ', ' : '、'}
+                language={uiLanguage}
                 t={t}
               />
             ) : null}

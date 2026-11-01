@@ -55,7 +55,7 @@ describe('SettingsField', () => {
         </UiLanguageProvider>,
       );
       expect(screen.getByLabelText('自選股清單')).toBeInTheDocument();
-      expect(container.textContent).toContain('建議用英文逗號分隔股票代碼');
+      expect(container.textContent).toContain('建議用英文逗號分隔股票代號');
       expect(container.textContent).not.toMatch(/自选股列表|推荐使用英文逗号/);
       unmount();
       // 簡中介面不受影響
