@@ -352,7 +352,16 @@ def _legacy_audit_marker_specs(
 # and other modules still do `from src.analyzer import _AllModelsFailedError`,
 # and _call_litellm_impl below (which stays in this module — see its docstring)
 # raises/catches both.
-from src.llm.client import LLMClient, _AllModelsFailedError, _LiteLLMStreamError  # noqa: F401
+from src.llm.client import (  # noqa: F401
+    LLMClient,
+    _AllModelsFailedError,
+    _LiteLLMStreamError,
+    is_output_truncated,
+)
+
+# 個股分析的輸出上限。Anthropic adaptive thinking 的思考也算在額度內：
+# 8192 實測會在 JSON 開頭就截斷，16000 才完整（總輸出約 7600）。
+ANALYSIS_MAX_OUTPUT_TOKENS = 16000
 
 from src.utils.data_processing import normalize_report_signal_attribution
 from src.utils.sniper_points import SNIPER_KEYS, SNIPER_PRICES_KEY, find_sniper_prices, parse_structured_price
@@ -3752,7 +3761,8 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
         Args:
             prompt: User prompt text.
-            generation_config: Dict with optional keys: temperature, max_output_tokens, max_tokens.
+            generation_config: Dict with optional keys: temperature, max_output_tokens, max_tokens, on_output_truncated
+                (callable(usage, model); when set, truncated output counts as a failed attempt).
             response_validator: Optional callable that accepts the raw response text and raises
                 an exception if the response is unacceptable (e.g. not valid JSON).  When it
                 raises, the current model is treated as failed and the next fallback model is
@@ -3782,6 +3792,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         last_model: Optional[str] = None
         last_provider: Optional[str] = None
         last_usage: Dict[str, Any] = {}
+        # 只有傳了回呼的呼叫端（個股分析）才把截斷當失敗；其他呼叫端維持原行為
+        on_output_truncated = generation_config.get("on_output_truncated")
+        last_output_truncated = False
         effective_system_prompt = system_prompt or self.TEXT_SYSTEM_PROMPT
         router_model_names = set(get_configured_llm_models(config.llm_model_list))
         for model in models_to_try:
@@ -3873,6 +3886,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
                 _stream_text: Optional[str] = None
                 _stream_usage: Dict[str, Any] = {}
+                _stream_finish_reason = ""
 
                 if model_stream:
                     try:
@@ -3890,7 +3904,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                             cache_recovery=False,
                             logger=logger,
                         )
-                        _stream_text, _stream_usage = self._consume_litellm_stream(
+                        _stream_text, _stream_usage, _stream_finish_reason = self._consume_litellm_stream(
                             stream_response,
                             model=model,
                             usage_model=usage_model,
@@ -3899,7 +3913,12 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                         )
                     except _LiteLLMStreamError as exc:
                         safe_error = self._sanitize_litellm_exception_text(exc, config=config, model=model)
-                        if exc.partial_received:
+                        if on_output_truncated and is_output_truncated(exc.finish_reason):
+                            # 預算全燒在思考、沒有可見文字：同樣是截斷，不再多打一次非串流
+                            _stream_text = ""
+                            _stream_usage = exc.usage
+                            _stream_finish_reason = exc.finish_reason
+                        elif exc.partial_received:
                             logger.warning(
                                 "[LiteLLM] %s stream failed after partial output, retrying non-stream for same model: %s",
                                 model,
@@ -3921,7 +3940,6 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                         )
 
                 if _stream_text is not None:
-                    last_response_text = _stream_text
                     last_model = model
                     if usage_provider:
                         _stream_usage["provider"] = usage_provider
@@ -3929,6 +3947,15 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                     if usage_provider:
                         _stream_usage.setdefault("provider", usage_provider)
                     last_usage = _stream_usage
+                    if on_output_truncated and is_output_truncated(_stream_finish_reason):
+                        last_output_truncated = True
+                        last_response_text = None
+                        on_output_truncated(_stream_usage, model)
+                        raise ValueError(
+                            f"LLM output truncated (finish_reason={_stream_finish_reason}, max_tokens={max_tokens})"
+                        )
+                    last_output_truncated = False
+                    last_response_text = _stream_text
                     if response_validator is not None:
                         response_validator(_stream_text)
                     return _stream_text, model, _stream_usage
@@ -3959,7 +3986,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 if response_provider:
                     last_provider = response_provider
                 content = self._extract_completion_text(response)
-                if content:
+                finish_reason = self._finish_reason_of(response)
+                output_truncated = bool(on_output_truncated) and is_output_truncated(finish_reason)
+                if content or output_truncated:
                     usage_messages = None if audit_context is not None else call_kwargs["messages"]
                     usage = self._normalize_usage(
                         extract_usage_payload(response),
@@ -3975,11 +4004,19 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                         usage.setdefault("response_model", response_model)
                     if response_provider or usage_provider:
                         usage.setdefault("provider", response_provider or usage_provider)
-                    last_response_text = content
                     last_model = actual_model
                     if response_provider:
                         last_provider = response_provider
                     last_usage = usage
+                    if output_truncated:
+                        last_output_truncated = True
+                        last_response_text = None
+                        on_output_truncated(usage, actual_model)
+                        raise ValueError(
+                            f"LLM output truncated (finish_reason={finish_reason}, max_tokens={max_tokens})"
+                        )
+                    last_output_truncated = False
+                    last_response_text = content
                     if response_validator is not None:
                         response_validator(content)
                     return (content, actual_model, usage)
@@ -3990,11 +4027,12 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 #
                 # **别在讯息里叫人调 `LLM_MAX_TOKENS`**：那个环境变数只有选股 pipeline
                 # 读（`services/screening/config.py`），个股分析的预算是呼叫端写死的
-                # （`analyze()` 传 `max_output_tokens: 8192`）。实测 deepseek-v4-flash
-                # 在 8192 下仍有约 1/3 回空，所以真正的槓桿是换模型，不是加预算。
+                # （`ANALYSIS_MAX_OUTPUT_TOKENS`）。实测 deepseek-v4-flash 在 8192 下
+                # 仍有约 1/3 回空，所以这种情况真正的槓桿是换模型，不是加预算。
+                # （有內容才被截斷是另一回事：見 `analyze()` 的截斷處理。）
                 raise ValueError(
                     "LLM returned empty response "
-                    f"(finish_reason={self._finish_reason_of(response) or 'unknown'}, "
+                    f"(finish_reason={finish_reason or 'unknown'}, "
                     f"max_tokens={max_tokens}; finish_reason=length 表示 token 预算在产出"
                     "内容前就用完——推理模型常见，换非推理模型比加预算有效)"
                 )
@@ -4021,6 +4059,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             last_model=last_model,
             last_provider=last_provider,
             last_usage=last_usage,
+            output_truncated=last_output_truncated,
         )
 
     def generate_text(
@@ -4339,9 +4378,15 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 logger.debug(f"=== 完整 Prompt ({len(prompt)}字符) ===\n{prompt}\n=== End Prompt ===")
 
             # 设置生成配置
+            def _record_truncated_usage(usage: Dict[str, Any], truncated_model: str) -> None:
+                # 被截斷的那次也付了費；結尾的入帳只記最後一次，所以在發生當下記
+                if should_persist_usage_telemetry(usage):
+                    persist_llm_usage(usage, truncated_model, call_type="analysis", stock_code=code)
+
             generation_config = {
                 "temperature": config.llm_temperature,
-                "max_output_tokens": 8192,
+                "max_output_tokens": ANALYSIS_MAX_OUTPUT_TOKENS,
+                "on_output_truncated": _record_truncated_usage,
             }
 
             logger.info(f"[LLM调用] 开始调用 {model_name}...")
@@ -4352,6 +4397,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             llm_attempts: List[Dict[str, Any]] = []
             retry_count = 0
             max_retries = config.report_integrity_retry if config.report_integrity_enabled else 0
+            truncation_retried = False
             llm_client = self._resolve_llm_client()
 
             while True:
@@ -4367,6 +4413,30 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                         audit_context=legacy_audit_context,
                     )
                 except _AllModelsFailedError as exc:
+                    if exc.output_truncated:
+                        # 截斷的草稿不能拿來計分或補全：用原 prompt 重送一次，再截斷就明確失敗
+                        if truncation_retried:
+                            raise RuntimeError(_localized_text(
+                                report_language,
+                                en=f'Model output exceeded the limit ({ANALYSIS_MAX_OUTPUT_TOKENS} tokens) and was truncated twice; no report saved.',
+                                zh=f'模型输出超过上限（{ANALYSIS_MAX_OUTPUT_TOKENS} tokens），两次被截断，未产生报告。',
+                                zh_tw=f'模型輸出超過上限（{ANALYSIS_MAX_OUTPUT_TOKENS} tokens），兩次被截斷，未產生報告。',
+                                ko=f'모델 출력이 상한({ANALYSIS_MAX_OUTPUT_TOKENS} 토큰)을 초과해 두 번 잘렸으며 보고서를 만들지 않았습니다.',
+                            )) from exc
+                        truncation_retried = True
+                        current_prompt = prompt
+                        logger.warning("[LLM截斷] %s(%s): 輸出超過上限，用原 prompt 重送一次", name, code)
+                        _emit_progress(
+                            min(99, 93 + retry_count * 2),
+                            _localized_text(
+                                report_language,
+                                en=f'{name}: model output was truncated, retrying',
+                                zh=f'{name}：模型输出被截断，正在重试',
+                                zh_tw=f'{name}：模型輸出被截斷，正在重試',
+                                ko=f'{name}: 모델 출력이 잘려 다시 시도합니다',
+                            ),
+                        )
+                        continue
                     if exc.last_response_text is not None:
                         logger.warning(
                             "[LLM JSON] %s(%s): all models returned invalid JSON, using text fallback",

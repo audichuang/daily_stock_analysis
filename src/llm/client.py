@@ -65,13 +65,30 @@ from src.llm.response_content import strip_leading_think_wrapper
 
 logger = logging.getLogger(__name__)
 
+# 供應商表示「輸出撞到 max_tokens」的 finish_reason（LiteLLM 正規化為 length，原始值為 max_tokens）
+_OUTPUT_TRUNCATED_FINISH_REASONS = frozenset({"length", "max_tokens"})
+
+
+def is_output_truncated(finish_reason: Any) -> bool:
+    """回應是否因撞到輸出上限而被截斷（只比對明確的字串，未知值一律視為未截斷）。"""
+    return isinstance(finish_reason, str) and finish_reason.strip().lower() in _OUTPUT_TRUNCATED_FINISH_REASONS
+
 
 class _LiteLLMStreamError(RuntimeError):
     """Internal error wrapper that records whether any text was streamed."""
 
-    def __init__(self, message: str, *, partial_received: bool = False):
+    def __init__(
+        self,
+        message: str,
+        *,
+        partial_received: bool = False,
+        finish_reason: str = "",
+        usage: Optional[Dict[str, Any]] = None,
+    ):
         super().__init__(message)
         self.partial_received = partial_received
+        self.finish_reason = finish_reason
+        self.usage = usage or {}
 
 
 class _AllModelsFailedError(Exception):
@@ -87,6 +104,10 @@ class _AllModelsFailedError(Exception):
     ``last_model``, ``last_provider`` and ``last_usage`` record the resolved
     route identity and token usage from the last attempt so callers can persist
     diagnostics even on fallback.
+
+    ``output_truncated`` means the last attempt hit the output limit. Its partial
+    text is deliberately not kept in ``last_response_text`` so that it cannot reach
+    the text fallback or a retry prompt.
     """
 
     def __init__(
@@ -97,8 +118,10 @@ class _AllModelsFailedError(Exception):
         last_model: Optional[str] = None,
         last_provider: Optional[str] = None,
         last_usage: Optional[Dict[str, Any]] = None,
+        output_truncated: bool = False,
     ):
         super().__init__(message)
+        self.output_truncated = output_truncated
         self.last_response_text = last_response_text
         self.last_model = last_model
         self.last_provider = last_provider
@@ -432,12 +455,13 @@ class LLMClient:
         usage_model: Optional[str] = None,
         provider: Optional[str] = None,
         progress_callback: Optional[Callable[[int], None]] = None,
-    ) -> Tuple[str, Dict[str, Any]]:
-        """Consume a LiteLLM stream into a single text payload."""
+    ) -> Tuple[str, Dict[str, Any], str]:
+        """Consume a LiteLLM stream into (text, usage, finish_reason)."""
         chunks: List[str] = []
         usage: Dict[str, Any] = {}
         chars_received = 0
         next_emit_at = 1
+        finish_reason = ""
 
         try:
             for chunk in stream_response:
@@ -449,6 +473,9 @@ class LLMClient:
                 )
                 if normalized_usage:
                     usage = normalized_usage
+
+                # 結束原因通常在最後一個空 delta 的 chunk，必須在下面的 continue 之前讀
+                finish_reason = self._finish_reason_of(chunk) or finish_reason
 
                 delta_text = self._extract_stream_text(chunk)
                 if not delta_text:
@@ -470,12 +497,14 @@ class LLMClient:
             raise _LiteLLMStreamError(
                 f"{model} stream returned empty response",
                 partial_received=False,
+                finish_reason=finish_reason,
+                usage=usage,
             )
 
         if progress_callback and chars_received > 0:
             progress_callback(chars_received)
 
-        return response_text, usage
+        return response_text, usage, finish_reason
 
     def _get_generation_backend(self, backend_id: Optional[str] = None) -> GenerationBackend:
         """Return the configured generation backend."""

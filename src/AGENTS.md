@@ -35,7 +35,8 @@
 
 ## 踩雷
 
-- **LLM 回空與回非法 JSON 是兩種失敗。**回空多半是推理模型(如 `deepseek-v4-flash`)把預算花在推理上:內容為空而 `finish_reason=length`,症狀是隨機「分析未成功」,台股美股都會中。**加預算不是可用的槓桿**——個股分析的 `max_output_tokens` 由 `analyzer.analyze()` 寫死 8192,`LLM_MAX_TOKENS` 只有選股 pipeline 讀得到,實測 8192 下仍約 1/3 回空;要修就換 `LITELLM_MODEL`。非法 JSON 會走文字 fallback、結果標為失敗、不進彙總。別用同一種重試處理兩者。
+- **LLM 回空與回非法 JSON 是兩種失敗。**回空多半是推理模型(如 `deepseek-v4-flash`)把預算花在推理上:內容為空而 `finish_reason=length`,症狀是隨機「分析未成功」,台股美股都會中。**這種情況加預算不是可用的槓桿**——個股分析的輸出上限是 `analyzer.ANALYSIS_MAX_OUTPUT_TOKENS`,`LLM_MAX_TOKENS` 只有選股 pipeline 讀得到,`deepseek-v4-flash` 實測 8192 下仍約 1/3 回空;要修就換 `LITELLM_MODEL`。非法 JSON 會走文字 fallback、該次結果標為失敗;完整性重試救回時仍會成功、進彙總,兩次都非法才不進。別用同一種重試處理兩者。
+- **輸出被截斷是第三種失敗,與上一條不同,這裡預算就是槓桿。**Sonnet 5.5 的 adaptive thinking 也算在額度內,原本的 8192 會讓回應停在 JSON 開頭(`finish_reason=length`),所以上限調成 16000。截斷只在 `analyze()` 傳 `on_output_truncated` 時才算失敗:不進文字 fallback(那條會對 JSON 原文數關鍵字,算出假的分數與動作)、不塞草稿,用原 prompt 重送一次;再截斷就 `success=False`、不落庫,錯誤訊息直說超過上限。每次被截斷都當下入帳 `llm_usage`。`analyze()` 裡回空且 `finish_reason=length` 也走這條(重送一次、訊息說超過上限);但推理模型的槓桿仍是換模型,不是再加預算。
 - **排程器的 signal handler 只做賦值**,不取鎖、不寫 log。光把 log 移出去不夠——只要 handler 會拿任何不可重入的鎖,另一條執行緒就能跟它組成死鎖;單執行緒重現不出來,而 systemd 仍顯示 active。
 - **判斷「是不是台股」的函式不只一個,規則也不同**:後綴是否合法以 `market_symbol_utils.get_suffix_market` 為準,但另有幾處只看字尾 `.TW`／`.TWO`。新增判斷時委派給它,不要再寫一個 `endswith`。
 - **改上游的預設值時留空,不要刪除。**刪掉的話上游下次動到那幾行會自動合併回來;留成空字串,衝突就會出現在寫著理由的位置(踩過:分享圖預設帶上游作者的社群帳號)。上游的命名即使撞名也不改——每次合併都要付代價。
