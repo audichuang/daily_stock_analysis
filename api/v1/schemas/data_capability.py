@@ -58,6 +58,13 @@ class DataDatasetQuality(BaseModel):
     fallback_from: List[str] = Field(default_factory=list, description="Earlier priority sources skipped before selected source")
     coverage: Optional[Dict[str, Any]] = Field(None, description="Optional dataset coverage summary")
     warnings: List[str] = Field(default_factory=list, description="Stable warning codes")
+    # 以下為追加欄位；status 語意不變。data_date 與 last_success 不同：前者是資料本身的日期。
+    data_date: Optional[str] = Field(None, description="Latest data date actually stored (ISO date)")
+    data_market: Optional[str] = Field(None, description="Market data_date refers to")
+    expected_date: Optional[str] = Field(None, description="Latest session that should be present (ISO date)")
+    is_current: Optional[bool] = Field(None, description="data_date covers expected_date; null when unknown")
+    reason: Optional[str] = Field(None, description="Stable code explaining why the dataset is off")
+    fallback_active: bool = Field(False, description="An earlier priority source was skipped")
 
 
 class DataPriorityView(BaseModel):

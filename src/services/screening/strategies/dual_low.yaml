@@ -4,6 +4,8 @@
 name: dual_low
 display_name: 双低选股
 description: 偏稳健的低估值筛选策略，叠加当日活跃度与形态确认，避免长期只命中静态低估值票
+display_name_zh_tw: 雙低選股
+description_zh_tw: 偏穩健的低估值篩選，再看當日活躍度與型態確認
 version: "1.2"
 category: value
 tags: [value, defensive, low_valuation, dynamic_signal]

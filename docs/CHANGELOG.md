@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 選股開放台股與美股：趨勢品質、穩健價值、放量突破、量縮回檔依幣別另設門檻，其餘 6 支仍只給 A 股；策略 API 新增 `market` 參數、繁中名稱與條件清單，選股結果新增母體來源、資料日與漏斗，非 A 股的熱點回空。
+- [新功能] 回測列表分開「未到期」與「資料不足」，支援 `status`、`market`、`advice`、`sort`，預設已完成優先；新增 `GET /api/v1/backtest/series`，提供逐筆累計報酬（非資金曲線）與月勝率。
+- [新功能] 資料中心回傳實際資料日、預期場次與是否跟上，停用時附原因代碼並標示備援；舊 `status` 不變。
+- [新功能] 用量 API 追加每日彙總、前期比較、估算費用（單價設於 `LLM_USAGE_PRICES`，未設顯示空值，本機 CLI 標示訂閱不計費）、快取命中率與管道，呼叫列表支援 `offset`、`call_type`、`sort`。
 - [改進] iOS 今日頁新增近期事件總覽，行事曆從工具頁移到這裡；工具頁只留警報與連線捷徑、常用四項，其餘收進「進階」，移除與原生畫面重複的完整分析入口。
 - [新功能] 新增 `AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE`（預設關閉）：API 程序以獨立執行緒只跑警報監控，不需開 `SCHEDULE_ENABLED`、不跑每日分析；即時價規則只在開盤時段評估且報價須屬於今天這一場（確認不了就不通知、不進冷卻；報價不帶時間時，將要觸發才另查最後一筆成交，並用該筆價格重新評估與通知），排程器同時開啟時不重複註冊。
 - [新功能] 新增 `GET /api/v1/alerts/monitor/status` 回報監控實際狀態、上次執行與通知管道；資料中心的 `alert.monitor` 同步認得獨立執行緒。

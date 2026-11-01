@@ -78,6 +78,10 @@ class BacktestResultItem(BaseModel):
     entry_date: Optional[str] = None
     price_basis: Optional[str] = None
     adjustment_reason: Optional[str] = None
+    # eval_status 把「窗口還沒走完」也寫成 insufficient_data；這裡才分得開。舊欄位語意不變。
+    maturity_status: Optional[str] = Field(None, description="completed/pending/insufficient_data 等分流狀態")
+    matures_by: Optional[str] = Field(None, description="未到期時，窗口最晚走完的日期")
+    market: Optional[str] = None
 
 
 class BacktestResultsResponse(BaseModel):
@@ -85,6 +89,32 @@ class BacktestResultsResponse(BaseModel):
     page: int
     limit: int
     items: List[BacktestResultItem] = Field(default_factory=list)
+    status_counts: Dict[str, int] = Field(default_factory=dict, description="各分流的筆數，不受 status 參數影響")
+
+
+class BacktestSeriesPoint(BaseModel):
+    point_date: str = Field(..., serialization_alias="date", validation_alias="date")
+    analysis_history_id: int
+    code: str
+    return_pct: float
+    cumulative_return_pct: float
+
+
+class BacktestMonthlyWinRate(BaseModel):
+    month: str = Field(..., description="YYYY-MM")
+    completed: int
+    win: int
+    loss: int
+    neutral: int
+    win_rate_pct: Optional[float] = Field(None, description="勝／(勝＋負)；沒有勝負時為 null")
+
+
+class BacktestSeriesResponse(BaseModel):
+    chart_title: str = "逐筆累計（非資金曲線）"
+    eval_window_days: Optional[int] = None
+    truncated: bool = Field(False, description="超過上限時只含最新的列，累計值不含更早的部分")
+    points: List[BacktestSeriesPoint] = Field(default_factory=list)
+    monthly: List[BacktestMonthlyWinRate] = Field(default_factory=list)
 
 
 class PerformanceMetrics(BaseModel):

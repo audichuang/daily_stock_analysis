@@ -13,6 +13,58 @@ from src.config import get_config
 
 logger = logging.getLogger(__name__)
 
+# 資料集對應的 market schema 表；只有台股資料在 DB，data_market 一律標 tw。
+_MARKET_DATASET_TABLES = {
+    "kline.daily": "market.price",
+    "index.daily": "market.market_index",
+    "financial.snapshot": "market.valuation",
+}
+_FRESHNESS_QUERY_TIMEOUT_MS = 5000
+# 這些警告碼表示資料集被關掉或沒在跑，不是來源暫時失敗。
+_OFF_REASONS = (
+    "realtime_quote_disabled",
+    "fundamental_pipeline_disabled",
+    "screening_disabled",
+    "screening_engine_unavailable",
+    "agent_event_monitor_disabled",
+    "agent_event_monitor_not_running",
+)
+
+
+def _load_market_freshness() -> Dict[str, Any]:
+    """讀 market schema 各表實際最新日與預期場次。失敗回空：資料中心本身不能被 DB 拖垮。"""
+    if not os.getenv("DATABASE_URL"):
+        return {}
+    try:
+        from sqlalchemy import text
+
+        from market_data.db import get_engine
+        from market_data.health import expected_session
+
+        latest: Dict[str, Any] = {}
+        engine = get_engine(statement_timeout_ms=_FRESHNESS_QUERY_TIMEOUT_MS, read_only=True)
+        with engine.connect() as conn:
+            for dataset, table in _MARKET_DATASET_TABLES.items():
+                latest[dataset] = conn.execute(text(f"select max(date) from {table}")).scalar()  # noqa: S608
+        return {"latest": latest, "expected": expected_session()}
+    except Exception as exc:  # noqa: BLE001 - diagnostics must fail open.
+        logger.warning("Failed to read market freshness for capability overview: %s", exc)
+        return {}
+
+
+def _realtime_last_success() -> Optional[str]:
+    """本程序內即時來源最近一次成功；沒有紀錄（剛啟動或沒查過）回 None，不假裝成功。"""
+    try:
+        from data_provider.realtime_types import get_realtime_circuit_breaker
+
+        times = get_realtime_circuit_breaker().last_success_times()
+    except Exception as exc:  # noqa: BLE001 - diagnostics must fail open.
+        logger.debug("Failed to read realtime circuit state: %s", exc)
+        return None
+    if not times:
+        return None
+    return datetime.fromtimestamp(max(times.values()), timezone.utc).astimezone().isoformat()
+
 
 @dataclass(frozen=True)
 class _ProviderDefinition:
@@ -254,11 +306,15 @@ class DataCapabilityService:
         fetcher_manager: Any = None,
         runtime_scheduler: Any = None,
         alert_monitor_thread: Any = None,
+        market_freshness_loader: Optional[Callable[[], Dict[str, Any]]] = None,
+        realtime_last_success_loader: Optional[Callable[[], Optional[str]]] = None,
     ) -> None:
         self.config = config or get_config()
         self.fetcher_manager = fetcher_manager
         self.runtime_scheduler = runtime_scheduler
         self.alert_monitor_thread = alert_monitor_thread
+        self.market_freshness_loader = market_freshness_loader or _load_market_freshness
+        self.realtime_last_success_loader = realtime_last_success_loader or _realtime_last_success
 
     def get_overview(self) -> Dict[str, Any]:
         """Return a read-only data capability overview."""
@@ -267,7 +323,7 @@ class DataCapabilityService:
         providers = self._build_provider_capabilities(fetchers)
         provider_map = {item["name"]: item for item in providers}
         priorities = self._build_priority_views(fetchers)
-        datasets = self._build_dataset_quality(provider_map, priorities, fetchers)
+        datasets = self._annotate_datasets(self._build_dataset_quality(provider_map, priorities, fetchers))
         warnings = self._build_global_warnings(provider_map, priorities)
 
         return {
@@ -643,6 +699,31 @@ class DataCapabilityService:
             self._alert_monitor_dataset(),
             self._local_dataset("portfolio.account", "portfolio"),
         ]
+        return datasets
+
+    def _annotate_datasets(self, datasets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """追加真實的資料日期、停用原因與備援狀態；既有的 status 不動。"""
+        freshness = self.market_freshness_loader() or {}
+        latest = freshness.get("latest") or {}
+        expected = freshness.get("expected")
+        for item in datasets:
+            warnings = item.get("warnings") or []
+            data_date = latest.get(item["dataset"])
+            item.update({
+                "data_date": data_date.isoformat() if data_date else None,
+                "data_market": "tw" if data_date else None,
+                "expected_date": expected.isoformat() if data_date and expected else None,
+                "is_current": bool(data_date >= expected) if data_date and expected else None,
+                "reason": next((code for code in warnings if code in _OFF_REASONS), None),
+                "fallback_active": bool(item.get("fallback_from")),
+            })
+            if data_date:
+                # 來源可用不等於資料是新的；官方端點曾凍結 79 天仍回 200。
+                item["last_success"] = data_date.isoformat()
+                if item["is_current"] is not None:
+                    item["stale"] = not item["is_current"]
+            elif item["dataset"] == "quote.realtime" and item.get("status") != "unavailable":
+                item["last_success"] = self.realtime_last_success_loader()
         return datasets
 
     def _daily_market_priorities(
@@ -1222,13 +1303,30 @@ class DataCapabilityService:
                 "warnings": [*warnings, "screening_engine_unavailable"],
             }
 
-        return self._dataset_from_priority(
+        result = self._dataset_from_priority(
             dataset="strategy.screening",
             priority={"providers": providers, "warnings": warnings},
             provider_map={},
             status_resolver=self._screening_source_status_resolver(source_health),
             stop_on_unknown=True,
         )
+        result["last_success"] = self._screening_last_success(source_health)
+        return result
+
+    @staticmethod
+    def _screening_last_success(source_health: Dict[str, Any]) -> Optional[str]:
+        snapshot_health = source_health.get("snapshot") if isinstance(source_health, dict) else None
+        if not isinstance(snapshot_health, dict):
+            return None
+        stamps = [
+            float(state.get("last_success_at") or 0)
+            for state in snapshot_health.values()
+            if isinstance(state, dict)
+        ]
+        latest = max(stamps, default=0.0)
+        if latest <= 0:
+            return None
+        return datetime.fromtimestamp(latest, timezone.utc).astimezone().isoformat()
 
     def _screening_runtime_health(self) -> tuple[bool, Dict[str, Any]]:
         try:

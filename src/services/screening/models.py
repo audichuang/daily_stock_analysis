@@ -64,6 +64,11 @@ class ScreeningConfig:
     event_profile: dict[str, Any] = field(default_factory=dict)
     ranking_hints: str = ""
     max_output: int = 5
+    # 門檻帶幣別語意（人民幣成交額套到台股或美股沒有意義），非 cn 市場各自一份，整組取代、不繼承。
+    market_hard_filters: dict[str, HardFilterConfig] = field(default_factory=dict)
+
+    def hard_filters_for(self, market: str) -> HardFilterConfig:
+        return self.market_hard_filters.get(market, self.hard_filters)
 
 
 @dataclass
@@ -89,6 +94,8 @@ class Strategy:
     analysis_skills: list[str] = field(default_factory=list)
     style: StrategyStyle = field(default_factory=StrategyStyle)
     screening: ScreeningConfig = field(default_factory=ScreeningConfig)
+    display_name_zh_tw: str = ""
+    description_zh_tw: str = ""
 
 
 @dataclass
@@ -110,6 +117,9 @@ class StrategyInfo:
     factor_weights: dict[str, float] = field(default_factory=dict)
     profile_keys: dict[str, list[str]] = field(default_factory=dict)
     style: dict[str, object] = field(default_factory=dict)
+    display_name_zh_tw: str = ""
+    description_zh_tw: str = ""
+    market_conditions: dict[str, list[dict[str, object]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -236,6 +246,11 @@ class ScreenResult:
     result_variant_rotated_slots: int = 0
     saved_path: str = ""
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    # 實際母體來源（美股會靜默退回內建清單）、快照資料日、快照門檻後與日線門檻前的檔數。
+    universe_source: str = ""
+    universe_size: int | None = None
+    snapshot_date: str = ""
+    snapshot_filter_count: int | None = None
 
 
 @dataclass

@@ -47,6 +47,8 @@ from src.services.screening.strategy import load_all_strategies
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_MARKETS = ("cn", "us", "tw")
+
 
 def screen(
     strategy: str,
@@ -79,7 +81,7 @@ def screen(
 
     Args:
         strategy: Strategy name (matches a YAML file in strategies/).
-        market: Market scope, currently only "cn".
+        market: Market scope: "cn", "us" or "tw".
         max_output: Override max output count from strategy.
         use_llm: Whether to use LLM for L2 ranking.
         llm_context: Optional market/news/theme context supplied to the LLM ranker.
@@ -112,8 +114,8 @@ def screen(
     if config is None:
         config = Config.from_env()
 
-    if market not in ("cn", "us"):
-        raise ValueError(f"Unsupported market: {market!r} (supported: cn, us)")
+    if market not in SUPPORTED_MARKETS:
+        raise ValueError(f"Unsupported market: {market!r} (supported: {', '.join(SUPPORTED_MARKETS)})")
 
     run_id = uuid.uuid4().hex[:12]
     degradation: list[str] = []
@@ -141,10 +143,16 @@ def screen(
         post_analysis_max_picks
         or deep_analysis_max_picks
     )
-    daily_needed = requires_daily_features(screening.hard_filters)
+    hard_filters = screening.hard_filters_for(market)
+    daily_needed = requires_daily_features(hard_filters)
     daily_requested = config.daily_enrich_enabled if daily_enrich is None else daily_enrich
     daily_limit = daily_enrich_max_candidates or config.daily_enrich_max_candidates
-    snapshot_filters = without_daily_filters(screening.hard_filters) if daily_needed else screening.hard_filters
+    snapshot_filters = without_daily_filters(hard_filters) if daily_needed else hard_filters
+    if market == "tw":
+        # 共用的 DSA 日線 fetcher 會把 2330.TW 正規化成 002330、用 A 股日曆判新鮮度，也會退回 A 股來源。
+        from market_data.tw_prescreen import make_daily_history_fetcher
+
+        daily_history_fetcher = make_daily_history_fetcher()
 
     # 2. Fetch snapshot
     _emit_progress(progress_callback, 25, "正在读取全市场快照")
@@ -167,6 +175,9 @@ def screen(
         else config.industry_provider
     )
     effective_industry_provider = str(effective_industry_provider or "none").strip().lower()
+    if market == "tw":
+        # 板塊來源（akshare 等）沒有台股，查了只有連外失敗。
+        effective_industry_provider = "none"
     if effective_industry_map_files or effective_industry_provider not in {"", "none", "off", "false"}:
         snapshot_df, industry_notes = enrich_industry_concepts(
             snapshot_df,
@@ -180,6 +191,11 @@ def screen(
     snapshot_count = len(snapshot_df)
     snapshot_source = str(snapshot_df.attrs.get("snapshot_source", ""))
     source_errors = [str(item) for item in snapshot_df.attrs.get("source_errors", [])]
+    universe_source = str(snapshot_df.attrs.get("universe_source", ""))
+    universe_size = _safe_int(snapshot_df.attrs.get("universe_size"))
+    snapshot_date = str(snapshot_df.attrs.get("snapshot_date", ""))
+    if market == "us" and universe_source != "sp500":
+        degradation.append(f"US universe fallback: {universe_source or 'unknown'}")
     degradation.extend(f"Snapshot source fallback: {item}" for item in source_errors)
     if bool(snapshot_df.attrs.get("fallback_used")):
         stale_age = snapshot_df.attrs.get("stale_age_hours")
@@ -201,6 +217,7 @@ def screen(
             )
     df = apply_hard_filters(snapshot_df, snapshot_filters)
     after_filter_count = len(df)
+    snapshot_filter_count = after_filter_count
     _emit_progress(
         progress_callback,
         42,
@@ -221,6 +238,10 @@ def screen(
             strategy_category=strat.category,
             effective_factor_weights=normalized_factor_weights(screening),
             post_analyzers=analyzer_names,
+            universe_source=universe_source,
+            universe_size=universe_size,
+            snapshot_date=snapshot_date,
+            snapshot_filter_count=snapshot_filter_count,
             daily_enriched=False,
             risk_enabled=config.risk_enabled,
             portfolio_diversity_enabled=config.portfolio_diversity_enabled,
@@ -277,7 +298,7 @@ def screen(
                 degradation.append(f"Daily K-line enrichment row errors: {sample}{suffix}")
             if daily_needed:
                 if explain_filters:
-                    daily_waterfall = hard_filter_waterfall(enriched, screening.hard_filters)
+                    daily_waterfall = hard_filter_waterfall(enriched, hard_filters)
                     if daily_waterfall:
                         degradation.append(
                             "Daily hard-filter waterfall: "
@@ -285,10 +306,10 @@ def screen(
                         )
                 daily_filter_rejections = hard_filter_rejection_summary(
                     enriched,
-                    screening.hard_filters,
+                    hard_filters,
                     limit=6,
                 )
-                df = apply_hard_filters(enriched, screening.hard_filters)
+                df = apply_hard_filters(enriched, hard_filters)
                 after_filter_count = len(df)
                 if daily_filter_rejections:
                     degradation.append(
@@ -319,6 +340,10 @@ def screen(
             snapshot_source=snapshot_source,
             source_errors=source_errors,
             post_analyzers=analyzer_names,
+            universe_source=universe_source,
+            universe_size=universe_size,
+            snapshot_date=snapshot_date,
+            snapshot_filter_count=snapshot_filter_count,
             daily_enriched=daily_enriched,
             daily_enrich_count=daily_enrich_count,
             risk_enabled=config.risk_enabled,
@@ -554,6 +579,10 @@ def screen(
         source_errors=source_errors,
         deep_analysis_requested=("dsa" in analyzer_names),
         post_analyzers=analyzer_names,
+        universe_source=universe_source,
+        universe_size=universe_size,
+        snapshot_date=snapshot_date,
+        snapshot_filter_count=snapshot_filter_count,
         daily_enriched=daily_enriched,
         daily_enrich_count=daily_enrich_count,
         risk_enabled=config.risk_enabled,
