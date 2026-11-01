@@ -1941,6 +1941,7 @@ const HomePage: React.FC = () => {
           stockName={selectedReport.meta.stockName || ''}
           stockCode={selectedReport.meta.stockCode}
           reportLanguage={reportLanguage}
+          summary={selectedReport.summary}
           onClose={closeMarkdownDrawer}
         />
       ) : null}

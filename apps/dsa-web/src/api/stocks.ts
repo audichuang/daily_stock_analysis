@@ -255,6 +255,26 @@ export const stocksApi = {
     const data = response.data as { points?: Array<{ t: string; price: number }> };
     return (data.points ?? []).map((p) => ({ t: p.t, price: p.price }));
   },
+
+  /** 日 K；後端週、月 K 會拋錯，days 上限 365（實際回溯約 days×2 日曆日）。 */
+  async getDailyHistory(code: string, days = 365): Promise<PriceBar[]> {
+    const response = await apiClient.get(`/api/v1/stocks/${encodeURIComponent(code)}/history`, {
+      params: { period: 'daily', days },
+    });
+    return toCamelCase<{ data?: PriceBar[] }>(response.data).data ?? [];
+  },
+};
+
+export type PriceBar = {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number | null;
+  amount?: number | null;
+  changePercent?: number | null;
+  provisional?: boolean | null;
 };
 
 export type TrendRange = 'day' | 'month' | 'year';

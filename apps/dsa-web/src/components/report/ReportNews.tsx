@@ -6,43 +6,36 @@ import { ApiErrorAlert, Card } from '../common';
 import { DashboardPanelHeader, DashboardStateBlock } from '../dashboard';
 import { historyApi } from '../../api/history';
 import type { NewsIntelItem, ReportLanguage } from '../../types/analysis';
+import { markdownToPlainText } from '../../utils/markdown';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
 
 interface ReportNewsProps {
-  recordId?: number;  // 分析历史记录主键 ID
+  recordId?: number;  // 分析歷史紀錄主鍵 ID
   limit?: number;
   language?: ReportLanguage;
 }
 
-const NEWS_SOURCE_TEXT = {
-  zh: {
-    sourceLabel: '相关资讯/后续检索',
-    sourceHint: '来源：报告页补充资讯；是否用于分析以输入数据块为准。',
-  },
-  en: {
-    sourceLabel: 'Related news / follow-up retrieval',
-    sourceHint: 'Source: supplemental report-page news; analysis input is shown in Input Blocks.',
-  },
-  'zh-TW': {
-    sourceLabel: '相關資訊 / 後續檢索',
-    sourceHint: '來源：報告頁補充資訊；是否用於分析以輸入資料區塊為準。',
-  },
-  ko: {
-    sourceLabel: '관련 뉴스 / 후속 검색',
-    sourceHint: '출처: 리포트 페이지 보충 뉴스이며, 분석 사용 여부는 입력 데이터 블록 기준입니다.',
-  },
-} as const;
+const DEFAULT_VISIBLE = 3;
+
+// 網址來自外部搜尋結果，只讓 http(s) 變成連結。
+const safeNewsUrl = (url?: string | null): string | null => {
+  const trimmed = url?.trim() ?? '';
+  return /^https?:\/\//i.test(trimmed) ? trimmed : null;
+};
+
+const newsDate = (item: NewsIntelItem): string | null =>
+  (item.publishedAt || item.publishedDate || '').slice(0, 10) || null;
 
 /**
- * 资讯区组件 - 终端风格
+ * 資訊區：單行列表，預設 3 則；整列可點，來源與日期放右側。
  */
 export const ReportNews: React.FC<ReportNewsProps> = ({ recordId, limit = 8, language = 'zh' }) => {
   const reportLanguage = normalizeReportLanguage(language);
   const text = getReportText(reportLanguage);
-  const sourceText = NEWS_SOURCE_TEXT[reportLanguage];
   const [isLoading, setIsLoading] = useState(false);
   const [items, setItems] = useState<NewsIntelItem[]>([]);
   const [error, setError] = useState<ParsedApiError | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   const fetchNews = useCallback(async () => {
     if (!recordId) return;
@@ -62,6 +55,7 @@ export const ReportNews: React.FC<ReportNewsProps> = ({ recordId, limit = 8, lan
   useEffect(() => {
     setItems([]);
     setError(null);
+    setExpanded(false);
 
     if (recordId) {
       fetchNews();
@@ -72,19 +66,17 @@ export const ReportNews: React.FC<ReportNewsProps> = ({ recordId, limit = 8, lan
     return null;
   }
 
+  const visibleItems = expanded ? items : items.slice(0, DEFAULT_VISIBLE);
+
   return (
-    <Card variant="bordered" padding="md" className="home-panel-card">
+    <Card variant="surface" padding="md" className="home-panel-card">
       <DashboardPanelHeader
-        eyebrow={text.newsFeed}
         title={text.relatedNews}
         actions={(
           <div className="flex items-center gap-2">
             {isLoading ? (
               <div className="home-spinner h-3.5 w-3.5 animate-spin border-2" aria-hidden="true" />
             ) : null}
-            <span className="home-accent-chip px-2 py-0.5 text-xs text-muted-text">
-              {sourceText.sourceLabel}
-            </span>
             <button
               type="button"
               onClick={() => void fetchNews()}
@@ -96,9 +88,6 @@ export const ReportNews: React.FC<ReportNewsProps> = ({ recordId, limit = 8, lan
           </div>
         )}
       />
-      <p className="mb-3 text-xs leading-5 text-muted-text">
-        {sourceText.sourceHint}
-      </p>
 
       {error && !isLoading && (
         <ApiErrorAlert
@@ -122,56 +111,46 @@ export const ReportNews: React.FC<ReportNewsProps> = ({ recordId, limit = 8, lan
           compact
           title={text.noNews}
           description={text.noNewsDescription}
-          icon={(
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 14l-7-7m0 0l-7 7m7-7v18" />
-            </svg>
-          )}
         />
       )}
 
       {!isLoading && !error && items.length > 0 && (
-        <div className="space-y-3 text-left">
-          {items.map((item, index) => (
-            <div
-              key={`${item.title}-${index}`}
-              className="home-subpanel home-news-item group p-4"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0 text-left">
-                  <p className="home-news-title text-sm font-medium leading-6 text-foreground text-left">
-                    {item.title}
-                  </p>
-                  {item.snippet && (
-                    <p className="home-news-snippet mt-2 text-sm leading-6 text-secondary-text text-left overflow-hidden [display:-webkit-box] [-webkit-line-clamp:3] [-webkit-box-orient:vertical]">
-                      {item.snippet}
-                    </p>
+        <>
+          <ul className="divide-y divide-border/50 text-left" data-testid="report-news-list">
+            {visibleItems.map((item, index) => {
+              const title = markdownToPlainText(item.title) || item.title;
+              const url = safeNewsUrl(item.url);
+              const date = newsDate(item);
+              const meta = [item.source?.trim(), date].filter(Boolean).join(' · ');
+              const row = (
+                <>
+                  <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={item.keyPoint || title}>{title}</span>
+                  {meta ? <span className="max-w-[45%] shrink-0 truncate text-xs tabular-nums text-muted-text">{meta}</span> : null}
+                </>
+              );
+              return (
+                <li key={`${item.title}-${index}`}>
+                  {url ? (
+                    <a href={url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 rounded py-2 hover:bg-hover">
+                      {row}
+                    </a>
+                  ) : (
+                    <div className="flex items-center gap-3 py-2">{row}</div>
                   )}
-                </div>
-                {item.url && (
-                  <a
-                    href={item.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="home-accent-pill-link shrink-0 whitespace-nowrap px-2.5 py-1 text-xs"
-                    aria-label={text.openLink}
-                  >
-                    {text.openLink}
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M14 3h7m0 0v7m0-7L10 14"
-                      />
-                    </svg>
-                  </a>
-                )}
-              </div>
-            </div>
-          ))}
-
-        </div>
+                </li>
+              );
+            })}
+          </ul>
+          {items.length > DEFAULT_VISIBLE ? (
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              className="home-accent-link mt-2 text-xs"
+            >
+              {expanded ? text.collapseNews : text.expandNews.replace('{count}', String(items.length))}
+            </button>
+          ) : null}
+        </>
       )}
     </Card>
   );

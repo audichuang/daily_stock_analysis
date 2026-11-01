@@ -112,6 +112,24 @@ export const getRequestedPhaseLabel = (
   return `${TEXT[reportLanguage].requestPrefix}: ${label}`;
 };
 
+/** 不帶「市場階段:」前綴的標籤，清單與報告標題都用這個。 */
+export const getMarketPhaseShortLabel = (
+  summary?: MarketPhaseSummary | null,
+  language?: ReportLanguage | null,
+): string | null => {
+  if (!summary) {
+    return null;
+  }
+
+  const phaseLabel = MARKET_PHASE_LABELS[normalizeReportLanguage(language)][summary.phase];
+  if (!phaseLabel) {
+    return null;
+  }
+
+  const market = (summary.market || '').trim().toUpperCase();
+  return market ? `${market} · ${phaseLabel}` : phaseLabel;
+};
+
 export const getMarketPhaseSummaryLabel = (
   summary?: MarketPhaseSummary | null,
   language?: ReportLanguage | null,
@@ -120,15 +138,8 @@ export const getMarketPhaseSummaryLabel = (
     return null;
   }
 
-  const reportLanguage = normalizeReportLanguage(language);
-  const phaseLabel = MARKET_PHASE_LABELS[reportLanguage][summary.phase];
-  if (!phaseLabel) {
-    return null;
-  }
-
-  const market = (summary.market || '').trim().toUpperCase();
-  const value = market ? `${market} · ${phaseLabel}` : phaseLabel;
-  return `${TEXT[reportLanguage].finalPrefix}: ${value}`;
+  const value = getMarketPhaseShortLabel(summary, language);
+  return value ? `${TEXT[normalizeReportLanguage(language)].finalPrefix}: ${value}` : null;
 };
 
 export const getPartialBarLabel = (language?: ReportLanguage | null): string =>

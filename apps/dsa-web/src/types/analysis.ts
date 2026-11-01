@@ -85,6 +85,29 @@ export interface ReportMeta {
   modelUsed?: string;  // 历史元数据快照，仅用于展示，不用于运行时模型选择
   marketPhaseSummary?: MarketPhaseSummary | null;
   assetType?: 'stock' | 'index';  // 后端权威资产类型；index 用于隐藏 stock-only 自选操作
+  /** 現價所屬場次（YYYY-MM-DD）；抓取時間不算資料日。 */
+  priceDate?: string | null;
+  priceFetchedAt?: string | null;
+  currency?: string | null;
+  changeAmount?: number | null;
+  previousReport?: ReportPreviousSummary | null;
+  /** 目前是否持有；null 是無法判定，不等於未持有。 */
+  held?: boolean | null;
+}
+
+/** 同一檔的前一份報告摘要 */
+export interface ReportPreviousSummary {
+  id?: number | null;
+  action?: DecisionAction | null;
+  score?: number | null;
+  createdAt?: string | null;
+  stopLoss?: number | null;
+}
+
+/** 分持股狀態的建議 */
+export interface ReportPositionAdvice {
+  noPosition?: string | null;
+  hasPosition?: string | null;
 }
 
 /** Sentiment label */
@@ -120,6 +143,20 @@ export interface ReportSummary {
   trendPrediction: string;
   sentimentScore: number;
   sentimentLabel?: SentimentLabel;
+  oneSentence?: string | null;
+  timeSensitivity?: string | null;
+  positionAdvice?: ReportPositionAdvice | null;
+  confidenceLevel?: string | null;
+  confidenceReason?: string | null;
+  guardrailApplied?: boolean | null;
+  guardrailReason?: string | null;
+  strongestBullishSignal?: string | null;
+  strongestBearishSignal?: string | null;
+  phaseWatchConditions?: string[] | null;
+  entryConditions?: string[] | null;
+  exitTriggers?: string[] | null;
+  pendingEvents?: string[] | null;
+  nextCheckTime?: string | null;
 }
 
 export interface SniperPrices {
@@ -136,6 +173,8 @@ export interface ReportStrategy {
   secondaryBuy?: string;
   stopLoss?: string;
   takeProfit?: string;
+  /** structured＝模型給的數字；legacy＝舊報告由文字解析，不拿來算距現價。 */
+  sniperPricesSource?: 'structured' | 'legacy' | null;
 }
 
 export interface RelatedBoard {
@@ -619,6 +658,8 @@ export interface NewsIntelItem {
   source?: string | null;
   publishedDate?: string | null;
   dimension?: string | null;
+  publishedAt?: string | null;
+  keyPoint?: string | null;
 }
 
 /** News response */

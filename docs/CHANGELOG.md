@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改進] Web 報告首屏改單欄：股名下直接給動作（依枚舉查詞彙表，舊報告的「減倉」顯示「減碼」）、一句話、時效、信心、模型評分刻度條與前份比較，分「手上沒有／手上有」兩欄，確定持有才置頂；價格分現價、漲跌額與％、「10/30 收盤」三層；移除恐懼貪婪圓環與自選卡，星號進標題列；市場階段標籤不再帶前綴。
+- [新功能] Web 報告新增日 K 圖（MA20／60、成交量、停損目標線，1月／3月／1年）與關鍵數字；重大波動事件卡、「什麼時候改變看法」、依來源分組的證據與「這份報告缺什麼」。
+- [改進] Web 關鍵價位依動作切換：減碼、觀望顯示風控線與反彈減碼價，買進才有進場價；只有結構化數字才算距現價與價位階梯，舊報告顯示原文。
+- [改進] Web 報告新聞改單行列表（預設 3 則）；輸入資料、執行診斷、資料追溯收進「資料品質與來源」；完整報告抽屜有固定結論列與目錄、表格可換行、載入失敗可重試、複製鈕併成下拉。
 - [新功能] `/history/{id}` 回傳 `structured_report`（舊報告建構失敗維持 null），報告追加一句話結論、分持股建議、信心度、護欄、進出場條件、前次報告摘要、幣別、資料日與是否持有；ResearchArtifact 追加事件、各來源狀態與美股證據，失效條件的句子跟著報告語言走。
 - [新功能] `/history` 追加 `q`、`market`、`action` 查詢與 `stock_total`、`market_review_total`；個股清單追加 `analysis_price`、`change_pct`、`last_analyzed_at`（評分沿用既有的 `sentiment_score`）；新聞追加 `published_at` 與繁中 `key_point`，摘要去掉免責與行情樣板句。
 - [改進] zh-TW 動作用語改為買進、加碼、續抱、減碼、迴避、警報（舊報告的買入、減倉等仍可解析），系統提示詞本體改送繁體並帶詞彙表，報告表頭改為「項目｜數值」「點位｜價格」，沒有讀數的列省略，金額單位改「億」。

@@ -12,6 +12,9 @@ export type ResearchInvalidationCategory =
   | 'data_quality'
   | 'manual';
 export type ResearchInvalidationSeverity = 'watch' | 'warning' | 'critical';
+export type ResearchInvalidationDirection = 'below' | 'above';
+export type ResearchInvalidationStatus = 'pending' | 'triggered' | 'review';
+export type ResearchSourceStatus = 'ok' | 'no_data' | 'fetch_failed' | 'timeout' | 'not_configured' | 'not_supported';
 
 export interface ResearchSubject {
   stockCode: string;
@@ -30,6 +33,20 @@ export interface ResearchThesis {
   actionLabel?: string | null;
   reasons: string[];
   risks: string[];
+  oneSentence?: string | null;
+  timeSensitivity?: string | null;
+  positionAdvice?: { noPosition?: string | null; hasPosition?: string | null } | null;
+  confidenceLevel?: string | null;
+  confidenceReason?: string | null;
+  guardrailApplied?: boolean | null;
+  guardrailReason?: string | null;
+  strongestBullishSignal?: string | null;
+  strongestBearishSignal?: string | null;
+  watchConditions?: string[] | null;
+  entryConditions?: string[] | null;
+  exitTriggers?: string[] | null;
+  pendingEvents?: string[] | null;
+  nextCheckTime?: string | null;
 }
 
 export interface ResearchEvidenceItem {
@@ -43,6 +60,15 @@ export interface ResearchEvidenceItem {
   asOf?: string | null;
   url?: string | null;
   metadata: Record<string, unknown>;
+  group?: string | null;
+  observedAt?: string | null;
+  fetchedAt?: string | null;
+  windowDays?: number | null;
+  complete?: boolean | null;
+  countsTowardScore?: boolean | null;
+  facts?: Record<string, unknown> | null;
+  excerpt?: string | null;
+  series?: Array<Record<string, unknown>> | null;
 }
 
 export interface ResearchInvalidationCondition {
@@ -55,6 +81,8 @@ export interface ResearchInvalidationCondition {
   threshold?: string | null;
   dueAt?: string | null;
   metadata: Record<string, unknown>;
+  direction?: ResearchInvalidationDirection | null;
+  status?: ResearchInvalidationStatus;
 }
 
 export interface ResearchNextAction {
@@ -74,6 +102,22 @@ export interface ResearchDataQuality {
   limitations: string[];
 }
 
+/** 重大波動事件的事實；triggered 不為 true 時畫面不顯示。 */
+export interface ResearchEventGap {
+  triggered?: boolean | null;
+  eventDate?: string | null;
+  changePct?: number | null;
+  eventLow?: number | null;
+  sessionsSinceEvent?: number | null;
+  thresholdPct?: number | null;
+  latestClose?: number | null;
+  postEventMinClose?: number | null;
+  eventLowBroken?: boolean | null;
+  newsEvidencePresent?: boolean | null;
+  blockedWithoutNews?: boolean | null;
+  reason?: string | null;
+}
+
 export interface ResearchArtifact {
   schemaVersion: 'research-artifact-v1';
   artifactId: string;
@@ -87,4 +131,6 @@ export interface ResearchArtifact {
   nextActions: ResearchNextAction[];
   dataQuality: ResearchDataQuality;
   metadata: Record<string, unknown>;
+  eventGap?: ResearchEventGap | null;
+  sourceStatus?: Record<string, ResearchSourceStatus>;
 }
