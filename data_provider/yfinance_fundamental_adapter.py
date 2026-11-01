@@ -178,6 +178,22 @@ class YfinanceFundamentalAdapter:
         frame = ticker.insider_transactions if kind == "insider" else ticker.upgrades_downgrades
         return summarize_activity(frame, kind)
 
+    def get_us_estimate_evidence(self, stock_code: str) -> Dict[str, Any]:
+        """法人預估與近四季實績；單一屬性失敗只少那一塊。"""
+        if not is_us_stock_code(stock_code):
+            return {}
+        import yfinance as yf
+        from .us_evidence import summarize_estimates
+
+        ticker = yf.Ticker(_convert_to_yf_symbol(stock_code))
+        frames = {}
+        for name in ("earnings_estimate", "revenue_estimate", "earnings_history", "eps_revisions"):
+            try:
+                frames[name] = getattr(ticker, name)
+            except Exception as exc:
+                logger.warning("yfinance %s 讀取失敗 %s: %s", name, stock_code, type(exc).__name__)
+        return summarize_estimates(**frames)
+
     def get_fundamental_bundle(self, stock_code: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "status": "not_supported",

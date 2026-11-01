@@ -964,6 +964,9 @@ class AgentExecutor:
             if context.get("earnings_prompt"):
                 parts.append(context["earnings_prompt"])
 
+            if context.get("event_outlook_prompt"):
+                parts.append(context["event_outlook_prompt"])
+
             if context.get("us_evidence_prompt"):
                 parts.append(context["us_evidence_prompt"])
 

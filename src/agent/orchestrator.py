@@ -1278,7 +1278,7 @@ class AgentOrchestrator:
             if isinstance(analysis_context_pack_summary, str) and analysis_context_pack_summary:
                 ctx.meta["analysis_context_pack_summary"] = analysis_context_pack_summary
 
-            for key in ("event_gap", "us_evidence_prompt", "earnings_prompt"):
+            for key in ("event_gap", "us_evidence_prompt", "earnings_prompt", "event_outlook_prompt"):
                 if context.get(key):
                     ctx.meta[key] = context[key]
 

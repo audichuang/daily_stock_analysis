@@ -56,6 +56,7 @@ from api.v1.schemas.history import (
 )
 from api.v1.schemas.run_flow import RunFlowSnapshot
 from data_provider.base import canonical_stock_code, normalize_stock_code
+from src.services.event_outlook import extract_event_outlook
 from src.utils.sniper_points import find_sniper_points, find_sniper_prices, resolve_sniper_prices
 
 from src.data.stock_index_loader import resolve_index_stock_code
@@ -1386,6 +1387,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                     take_profit=_stringify_report_strategy_value(getattr(record, 'take_profit', None)),
                 ),
                 details=details,
+                event_outlook=extract_event_outlook(raw_result),
             ).model_dump()
             return TaskStatus(
                 task_id=task_id,
@@ -1667,5 +1669,10 @@ def _build_analysis_report(
         meta=meta,
         summary=summary,
         strategy=strategy,
-        details=details
+        details=details,
+        event_outlook=next(
+            (outlook for outlook in map(extract_event_outlook, (fallback_raw_result_payload, raw_result_data))
+             if outlook is not None),
+            None,
+        ),
     )

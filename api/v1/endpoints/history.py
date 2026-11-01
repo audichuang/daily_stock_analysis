@@ -46,6 +46,7 @@ from src.report_language import (
 from src.data.us_stock_name import display_stock_name
 from src.services.history_service import HistoryService, MarkdownReportGenerationError
 from src.services.analysis_service import asset_type_from_canonical_code
+from src.services.event_outlook import extract_event_outlook
 from src.schemas.decision_action import build_action_fields
 from src.utils.data_processing import (
     normalize_model_used,
@@ -674,7 +675,8 @@ def get_history_detail(
             meta=meta,
             summary=summary,
             strategy=strategy,
-            details=details
+            details=details,
+            event_outlook=extract_event_outlook(result.get("raw_result")),
         )
         
     except HTTPException:

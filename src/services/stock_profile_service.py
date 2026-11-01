@@ -11,6 +11,7 @@ from src.analysis_context_pack_overview import extract_analysis_context_pack_ove
 from src.repositories.portfolio_repo import PortfolioRepository
 from src.core.trading_calendar import latest_opened_session
 from src.services.alert_service import AlertService
+from src.services.event_outlook import extract_event_outlook
 from src.services.history_service import HistoryService
 from src.services.intelligence_service import IntelligenceService
 from src.services.market_symbol_utils import get_suffix_market
@@ -148,7 +149,7 @@ class StockProfileService:
         return {**history, "data": [*rows, bar]}
 
     def _research_block(self, code: str, *, market: str) -> Dict[str, Any]:
-        empty_data = {"latest_report": None, "recent_reports": [], "structured_report": None}
+        empty_data = {"latest_report": None, "recent_reports": [], "structured_report": None, "event_outlook": None}
         try:
             query_options: Dict[str, Any] = {
                 "stock_code": code,
@@ -201,6 +202,7 @@ class StockProfileService:
                 "latest_report": latest,
                 "recent_reports": reports,
                 "structured_report": artifact,
+                "event_outlook": extract_event_outlook(detail.get("raw_result")),
             },
             "limitations": [] if artifact else ["structured_report_unavailable"],
         }

@@ -354,6 +354,105 @@ class AgentDisagreementExplanation(BaseModel):
         return self
 
 
+def _exact_label(value: Any, allowed: tuple) -> Any:
+    """列舉只收精確標籤；其他值當沒給，不從文字猜語意。"""
+    return value if isinstance(value, str) and value in allowed else None
+
+
+def _text_or_none(value: Any) -> Optional[str]:
+    return value.strip() or None if isinstance(value, str) else None
+
+
+def _finite_or_none(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+class EventConsensus(BaseModel):
+    """下一季法人預估；只來自抓到的證據，模型的回聲不採用。"""
+
+    eps: Optional[float] = None
+    revenue: Optional[float] = None
+    analysts: Optional[int] = None
+    eps_currency: Optional[str] = None
+    revenue_currency: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _clean(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return {}
+        analysts = _finite_or_none(data.get("analysts"))
+        return {
+            "eps": _finite_or_none(data.get("eps")),
+            "revenue": _finite_or_none(data.get("revenue")),
+            "analysts": int(analysts) if analysts is not None else None,
+            "eps_currency": _text_or_none(data.get("eps_currency")),
+            "revenue_currency": _text_or_none(data.get("revenue_currency")),
+        }
+
+
+class EventScenario(BaseModel):
+    """單一情境下的預期反應與動作。"""
+
+    case: Literal["beat", "inline", "miss"]
+    expected_reaction: Optional[str] = None
+    action_if_holding: Optional[str] = None
+    action_if_flat: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _clean(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        return {
+            "case": data.get("case"),
+            **{key: _text_or_none(data.get(key))
+               for key in ("expected_reaction", "action_if_holding", "action_if_flat")},
+        }
+
+
+class EventOutlook(BaseModel):
+    """事件展望；純證據，不參與評分。"""
+
+    event: Optional[str] = None
+    # 回驗只計 earnings，靠這個結構化值分流，不解析 event 文字
+    event_type: Optional[Literal["earnings", "investor_conference", "other"]] = None
+    event_date: Optional[str] = None
+    consensus: Optional[EventConsensus] = None
+    track_record: Optional[str] = None
+    revision_trend: Optional[str] = None
+    expectation: Optional[Literal["beat", "inline", "miss", "insufficient_data"]] = None
+    confidence: Optional[Literal["high", "medium", "low"]] = None
+    reasoning: Optional[str] = None
+    scenarios: List[EventScenario] = Field(default_factory=list)
+    news_impact: Optional[str] = None
+    verify_after: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _clean(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        cleaned = {
+            key: _text_or_none(data.get(key))
+            for key in ("event", "event_date", "track_record", "revision_trend",
+                        "reasoning", "news_impact", "verify_after")
+        }
+        cleaned["event_type"] = _exact_label(data.get("event_type"), ("earnings", "investor_conference", "other"))
+        cleaned["expectation"] = _exact_label(data.get("expectation"), ("beat", "inline", "miss", "insufficient_data"))
+        cleaned["confidence"] = _exact_label(data.get("confidence"), ("high", "medium", "low"))
+        consensus = data.get("consensus")
+        cleaned["consensus"] = consensus if isinstance(consensus, dict) else None
+        scenarios = data.get("scenarios")
+        cleaned["scenarios"] = [
+            item for item in (scenarios if isinstance(scenarios, list) else [])
+            if isinstance(item, dict) and item.get("case") in ("beat", "inline", "miss")
+        ]
+        return cleaned
+
+
 class Dashboard(BaseModel):
     """Dashboard block."""
 
@@ -364,6 +463,7 @@ class Dashboard(BaseModel):
     phase_decision: Optional[PhaseDecision] = None
     signal_attribution: Optional[SignalAttribution] = None
     agent_disagreement_explanation: Optional[AgentDisagreementExplanation] = None
+    event_outlook: Optional[EventOutlook] = None
 
 
 class AnalysisReportSchema(BaseModel):

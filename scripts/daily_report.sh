@@ -330,6 +330,39 @@ morning_call_outcomes() {
   fi
 }
 
+# 事件展望回驗（scripts/verify_event_outlook.py）：非致命，寫法同上。預測在應用庫，這裡只留事後結果；
+# 沒有新結果不推通知，判定要看 make verify-event-outlook。
+EVENT_OUTLOOK_OUTCOMES_FILE="journal/event-outlook-outcomes.jsonl"
+event_outlook_outcomes() {
+  local out rc=0 branch push="" pending
+  out=$(run_with_timeout "${EVENT_OUTLOOK_VERIFY_TIMEOUT_SECONDS:-900}" \
+    uv run --env-file .env python scripts/verify_event_outlook.py --append 2>&1) || rc=$?
+  printf '%s\n' "$out" >>"$LOG"
+  if (( rc != 0 )); then
+    log "WARN: 事件展望回驗失敗（rc=${rc}），不影響每日報告"
+    notify_failure "事件展望回驗失敗（rc=${rc}），每日報告照常。log: $LOG" "事件展望回驗失敗" || true
+    return 0
+  fi
+  pending=$(git status --porcelain -- "$EVENT_OUTLOOK_OUTCOMES_FILE" 2>/dev/null)
+  if [[ -z "$pending" ]]; then
+    log "事件展望回驗：沒有新結果"
+    return 0
+  fi
+  branch=$(git branch --show-current)
+  if [[ "$branch" != "develop" ]]; then
+    push="未 commit（主 checkout 在 ${branch:-detached HEAD}）"
+  elif ! { git add -- "$EVENT_OUTLOOK_OUTCOMES_FILE" \
+      && git commit -q -m "journal: event outlook outcomes $(date +%F)" -- "$EVENT_OUTLOOK_OUTCOMES_FILE"; } >>"$LOG" 2>&1; then
+    push="commit 失敗（下一輪重試）"
+  else
+    push=$(bash scripts/media_picks_job.sh --push-journal 2>>"$LOG" | tail -1)
+  fi
+  log "事件展望回驗：${push}"
+  if [[ "$push" != "push ok" ]]; then
+    notify_failure "事件展望回驗結果未推上 develop：${push}。log: $LOG" "事件展望回驗留檔失敗" || true
+  fi
+}
+
 main() {
   set -uo pipefail
 
@@ -366,6 +399,8 @@ main() {
   run_step "台股資料健檢 (health --strict)" uv run --env-file .env python -m market_data.cli health --strict
   log "==> 盤前判讀回驗 (verify_morning_calls --append)"
   morning_call_outcomes
+  log "==> 事件展望回驗 (verify_event_outlook --append)"
+  event_outlook_outcomes
   run_step "LLM 連線預檢" llm_preflight
   # 外層疊 Doppler `finmind` 專案：注入 FINMIND_TOKEN_*，台股個股新聞先查 FinMind。
   run_step "自選股分析 + 大盤復盤" doppler run -p finmind -c dev -- "${DOPPLER_RUN[@]}" bash -c 'uv run python scripts/notify.py --check --topic report && TELEGRAM_MESSAGE_THREAD_ID="$TELEGRAM_TOPIC_REPORT" uv run python main.py'

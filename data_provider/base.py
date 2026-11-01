@@ -4383,6 +4383,16 @@ class DataFetcherManager:
                     evidence[key] = payload
                 if error:
                     result_ctx["errors"].append(error)
+            timeout = min(fetch_timeout, max(stage_timeout - (time.time() - start_ts), 0.0))
+            if getattr(config, "event_outlook_enabled", False) is True and timeout > 0:
+                payload, error, _ = self._run_with_timeout(
+                    lambda: self._yfinance_fundamental_adapter.get_us_estimate_evidence(stock_code),
+                    timeout, "us_evidence_estimates", quarantine_key=("yfinance", "us_evidence_estimates"),
+                )
+                if payload:
+                    evidence["estimates"] = payload
+                if error:
+                    result_ctx["errors"].append(error)
             from .futu_fetcher import FutuFetcher
             timeout = min(fetch_timeout, max(stage_timeout - (time.time() - start_ts), 0.0))
             if FutuFetcher.has_configured_endpoint() and timeout > 0:

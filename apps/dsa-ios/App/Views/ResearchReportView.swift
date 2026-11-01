@@ -23,6 +23,9 @@ struct ResearchReportView: View {
                 if let report {
                     reportHeader(report)
                     summaryCard(report)
+                    if let outlook = report.eventOutlook {
+                        EventOutlookCard(outlook: outlook)
+                    }
                     if report.meta.reportType != "market_review" {
                         ReportNewsView(reportID: reportID).id(reportID)
                     }

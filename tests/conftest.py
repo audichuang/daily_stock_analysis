@@ -119,6 +119,7 @@ os.environ["TW_CLOSURE_AUTODETECT"] = "false"
 os.environ["TW_LIVE_EVENTS_ENABLED"] = "false"
 # 賣方共識會連 yfinance、指數目標會多一行 prompt；擋掉 .env 漏入，要測的自己注入 config
 os.environ["ANALYST_CONSENSUS_ENABLED"] = "false"
+os.environ["EVENT_OUTLOOK_ENABLED"] = "false"
 os.environ["TW_BROKER_INDEX_TARGETS"] = ""
 
 _original_create_engine = sqlalchemy.create_engine

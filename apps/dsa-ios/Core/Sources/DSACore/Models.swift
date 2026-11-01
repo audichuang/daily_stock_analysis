@@ -101,6 +101,7 @@ public struct ResearchData: Codable, Sendable {
     public let latestReport: HistoryItem?
     public let recentReports: [HistoryItem]
     public let structuredReport: ResearchArtifact?
+    public let eventOutlook: EventOutlook?
 }
 
 public struct EvidenceQuality: Codable, Sendable {
@@ -213,6 +214,77 @@ public struct AnalysisReport: Codable, Sendable {
     public let summary: ReportSummary
     public let strategy: ReportStrategy?
     public let structuredReport: ResearchArtifact?
+    public let eventOutlook: EventOutlook?
+}
+
+public struct EventConsensus: Codable, Sendable {
+    public let eps: Double?
+    public let revenue: Double?
+    public let analysts: Int?
+    public let epsCurrency: String?
+    public let revenueCurrency: String?
+}
+
+public struct EventScenario: Codable, Sendable {
+    public let `case`: String
+    public let expectedReaction: String?
+    public let actionIfHolding: String?
+    public let actionIfFlat: String?
+}
+
+/// 事件展望；列舉欄位用字串，舊 App 遇到新值才不會整份報告解碼失敗。
+public struct EventOutlook: Codable, Sendable {
+    public let event: String?
+    public let eventType: String?
+    public let eventDate: String?
+    public let consensus: EventConsensus?
+    public let trackRecord: String?
+    public let revisionTrend: String?
+    public let expectation: String?
+    public let confidence: String?
+    public let reasoning: String?
+    public let scenarios: [EventScenario]?
+    public let newsImpact: String?
+    public let verifyAfter: String?
+
+    /// 最重要的判斷放最前面；未知值當資料不足，不猜。
+    public var expectationLabel: String {
+        switch expectation {
+        case "beat": return "判斷：超預期"
+        case "inline": return "判斷：符合預期"
+        case "miss": return "判斷：不及預期"
+        default: return "資料不足，不判斷"
+        }
+    }
+
+    public var confidenceLabel: String? {
+        switch confidence {
+        case "high": return "把握度高"
+        case "medium": return "把握度中"
+        case "low": return "把握度低"
+        default: return nil
+        }
+    }
+
+    public static func caseLabel(_ value: String) -> String {
+        switch value {
+        case "beat": return "如果超預期"
+        case "inline": return "如果符合"
+        case "miss": return "如果不及"
+        default: return value
+        }
+    }
+
+    /// 營收以「億」顯示，貼近使用者口語（1090 億）。
+    public var consensusSummary: String? {
+        guard let consensus else { return nil }
+        var parts: [String] = []
+        let unit: (String?) -> String = { $0.map { " \($0)" } ?? "" }
+        if let eps = consensus.eps { parts.append("EPS \(String(format: "%.2f", eps))\(unit(consensus.epsCurrency))") }
+        if let revenue = consensus.revenue { parts.append("營收 \(String(format: "%.0f", revenue / 100_000_000)) 億\(unit(consensus.revenueCurrency))") }
+        if let analysts = consensus.analysts { parts.append("\(analysts) 位分析師") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 }
 
 public struct ReportMeta: Codable, Sendable {

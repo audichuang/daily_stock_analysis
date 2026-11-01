@@ -387,6 +387,37 @@ export interface ReportDetails {
   marketStructure?: MarketStructureContext | null;
 }
 
+export type EventExpectation = 'beat' | 'inline' | 'miss' | 'insufficient_data';
+
+export interface EventOutlookScenario {
+  case: 'beat' | 'inline' | 'miss';
+  expectedReaction?: string | null;
+  actionIfHolding?: string | null;
+  actionIfFlat?: string | null;
+}
+
+/** 事件展望；附近沒有事件或舊報告時後端回 null */
+export interface EventOutlook {
+  event?: string | null;
+  eventType?: 'earnings' | 'investor_conference' | 'other' | null;
+  eventDate?: string | null;
+  consensus?: {
+    eps?: number | null;
+    revenue?: number | null;
+    analysts?: number | null;
+    epsCurrency?: string | null;
+    revenueCurrency?: string | null;
+  } | null;
+  trackRecord?: string | null;
+  revisionTrend?: string | null;
+  expectation?: EventExpectation | null;
+  confidence?: 'high' | 'medium' | 'low' | null;
+  reasoning?: string | null;
+  scenarios?: EventOutlookScenario[];
+  newsImpact?: string | null;
+  verifyAfter?: string | null;
+}
+
 /** Full analysis report */
 export interface AnalysisReport {
   meta: ReportMeta;
@@ -394,6 +425,7 @@ export interface AnalysisReport {
   strategy?: ReportStrategy;
   details?: ReportDetails;
   structuredReport?: ResearchArtifact | null;
+  eventOutlook?: EventOutlook | null;
 }
 
 // ============ Analysis Result Types ============
