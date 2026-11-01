@@ -196,6 +196,7 @@ def calendar_events(query):
 class State:
     def __init__(self):
         self.lock = threading.RLock()
+        self.calendar_failing = False
         self.watchlist = ["2330.TW", "2317.TW", "00631L.TW", "2303.TW", "2603.TW", "0050.TW", "00878.TW", "AAPL"]
         self.records = [history_item(101, "2330.TW"), history_item(102, "AAPL"),
                         history_item(201, "TWII", "market_review", "tw"),
@@ -283,6 +284,10 @@ class Handler(BaseHTTPRequestHandler):
             # 正式站報價常是 refresh 裡最慢的一支；延遲放在鎖外，重現下拉更新途中的取消。
             time.sleep(QUOTE_DELAY)
         with STATE.lock:
+            if route == ["__fixture", "calendar-failing"]:
+                # UI 測試注入行事曆失敗，驗證事件卡的失敗與恢復。
+                STATE.calendar_failing = query.get("on", ["0"])[0] == "1"
+                return self.reply(200, {"calendar_failing": STATE.calendar_failing})
             if route == ["health"]:
                 return self.reply(200, {"status": "fixture", "synthetic": True})
             if route == ["api", "v1", "auth", "status"]:
@@ -296,6 +301,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self.authenticated():
                 return self.reply(401, {"error": "unauthorized", "message": "請登入測試服務"})
             if route == ["api", "v1", "calendar", "events"]:
+                if STATE.calendar_failing:
+                    return self.reply(503, {"error": "fixture", "message": "合成行事曆失敗"})
                 return self.reply(200, calendar_events(query))
             if route == ["api", "v1", "alerts", "monitor", "status"]:
                 return self.reply(200, {

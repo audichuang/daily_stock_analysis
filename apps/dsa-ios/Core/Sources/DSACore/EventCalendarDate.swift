@@ -28,6 +28,20 @@ public enum EventCalendarDate {
     }
 
     /// 使用者所在地的「今天」：決定月曆預設開哪一天；事件本身仍以來源市場日期顯示。
+    /// 查詢下界取各市場最早的當地日期：台北上午時美東還是昨天，用裝置日期會漏掉美東當日事件。
+    public static func upcomingQueryRange(
+        now: Date = Date(),
+        days: Int,
+        deviceTimeZone: TimeZone = .current
+    ) -> (from: String, to: String)? {
+        let from = [deviceTimeZone.identifier, "Asia/Taipei", "America/New_York"]
+            .map { key(now, timezone: $0) }
+            .min()
+        guard let from, let start = parse(from),
+              let end = calendar.date(byAdding: .day, value: days, to: start) else { return nil }
+        return (from, key(end, timezone: "UTC"))
+    }
+
     public static func deviceToday(now: Date = Date(), timeZone: TimeZone = .current) -> String {
         key(now, timezone: timeZone.identifier)
     }

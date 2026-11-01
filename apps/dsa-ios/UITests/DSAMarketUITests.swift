@@ -377,9 +377,13 @@ final class DSAMarketUITests: XCTestCase {
         tap(app.buttons["connect-button"])
         XCTAssertTrue(app.tabBars.buttons["今日"].waitForExistence(timeout: 20))
         tap(app.segmentedControls["market-picker"].buttons["美股 US"])
-        let overview = app.descendants(matching: .any)["today.events"].firstMatch
-        scrollTo(overview)
-        XCTAssertTrue(text(containing: "Apple（測試）").waitForExistence(timeout: 15), "今日總覽要列近期財報")
+        scrollTo(eventsCard)
+        XCTAssertTrue(eventsCardText("Apple（測試）").waitForExistence(timeout: 15), "今日總覽要列近期財報")
+        XCTAssertTrue(eventsCardText("財報 · ").exists, "要看得出事件類型")
+        tap(app.segmentedControls["market-picker"].buttons["台股 TAIWAN"])
+        XCTAssertFalse(eventsCardText("Apple（測試）").exists, "台股分頁不列美股事件")
+        tap(app.segmentedControls["market-picker"].buttons["美股 US"])
+        XCTAssertTrue(eventsCardText("Apple（測試）").waitForExistence(timeout: 5))
         capture("13-今日近期事件")
         tap(app.buttons["today.calendar"])
         XCTAssertTrue(app.navigationBars["事件行事曆"].waitForExistence(timeout: 10))
@@ -461,6 +465,43 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
     }
 
+    func testTodayEventsCardRecoversFromFailure() throws {
+        try setCalendarFailing(true)
+        addTeardownBlock { [self] in try? setCalendarFailing(false) }
+        let password = app.secureTextFields["server-password"]
+        XCTAssertTrue(password.waitForExistence(timeout: 15))
+        password.tap()
+        password.typeText("fixture-password")
+        tap(app.buttons["connect-button"])
+        XCTAssertTrue(app.tabBars.buttons["今日"].waitForExistence(timeout: 20))
+        tap(app.segmentedControls["market-picker"].buttons["美股 US"])
+        scrollTo(eventsCard)
+        XCTAssertTrue(eventsCardText("暫時無法讀取行事曆").waitForExistence(timeout: 15), "失敗不能顯示成沒有事件")
+        XCTAssertFalse(eventsCardText("Apple（測試）").exists)
+        capture("事件卡失敗")
+
+        try setCalendarFailing(false)
+        tap(app.buttons["today.events.retry"])
+        XCTAssertTrue(eventsCardText("Apple（測試）").waitForExistence(timeout: 15), "重試要恢復")
+
+        // 下拉更新也要能恢復：重開讓卡片再次失敗，服務恢復後只靠下拉。
+        try setCalendarFailing(true)
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["今日"].waitForExistence(timeout: 20))
+        tap(app.segmentedControls["market-picker"].buttons["美股 US"])
+        scrollTo(eventsCard)
+        XCTAssertTrue(eventsCardText("暫時無法讀取行事曆").waitForExistence(timeout: 15))
+        try setCalendarFailing(false)
+        sleep(4) // 等連線後的首輪 refresh 跑完，避免下拉被 refreshing guard 略過。
+        eventsCard.press(forDuration: 0.1, thenDragTo: app.tabBars.firstMatch)
+        XCTAssertTrue(eventsCardText("Apple（測試）").waitForExistence(timeout: 20), "下拉更新要恢復")
+
+        tap(app.tabBars.buttons["工具"])
+        logoutFromTools()
+        XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
+    }
+
     func testPullToRefreshWithSlowQuotesShowsNoError() throws {
         let password = app.secureTextFields["server-password"]
         XCTAssertTrue(password.waitForExistence(timeout: 15), "應顯示測試伺服器的登入畫面")
@@ -532,6 +573,33 @@ final class DSAMarketUITests: XCTestCase {
         tap(app.buttons["stock-row.AAPL"])
         scrollTo(text(containing: "這次分析沒有可顯示的新聞或官方公告。"))
         capture("新聞-個股頁空狀態")
+        // Keychain 跨案例保留；登出才不會讓下一個案例看不到登入畫面。
+        tap(app.tabBars.buttons["工具"])
+        logoutFromTools()
+        XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
+    }
+
+    private var eventsCard: XCUIElement { app.descendants(matching: .any)["today.events"].firstMatch }
+
+    /// 只在事件卡內找：自選列也有同名公司，全域搜尋會讓事件卡失敗時假綠。
+    private func eventsCardText(_ value: String) -> XCUIElement {
+        eventsCard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", value)).firstMatch
+    }
+
+    private func setCalendarFailing(_ failing: Bool) throws {
+        let environment = ProcessInfo.processInfo.environment
+        let server = try XCTUnwrap(
+            environment["DSA_TEST_SERVER"] ?? environment["DSA_FIXTURE_PORT"].map { "http://127.0.0.1:\($0)" }
+        )
+        let url = try XCTUnwrap(URL(string: "\(server)/__fixture/calendar-failing?on=\(failing ? 1 : 0)"))
+        let done = expectation(description: "fixture 切換")
+        var status: Int?
+        URLSession.shared.dataTask(with: url) { _, response, _ in
+            status = (response as? HTTPURLResponse)?.statusCode
+            done.fulfill()
+        }.resume()
+        wait(for: [done], timeout: 10)
+        XCTAssertEqual(status, 200)
     }
 
     private func text(containing value: String) -> XCUIElement {
