@@ -116,6 +116,10 @@ build `202610292218` 已在同一個內部群組開放更新，Apple狀態為 `V
 
 修正自選頁下拉更新一直顯示「暫時無法取得資料／已取消」、報價不更新：`.refreshable` 的 task 在 store 發布中途結果時被 SwiftUI 取消，最慢的報價請求因此中斷（NAS access log 該輪沒有 quotes 紀錄）。`AppStore.refresh()` 改由 store 自己的 Task 執行；fixture 報價加 `--quote-delay 2` 的 UI test 修前紅、修後綠。程式由 [PR #155](https://github.com/audichuang/daily_stock_analysis/pull/155) 在 CI 40968619038 通過後合進 develop（`656d4a5d`）。從該提交封存（預設 `https://dsa.audichuang.app`，舊入口 `https://dsa.ttnas.audichuang.app`），以 `asc builds upload` 上傳，Apple 回讀為 `VALID`，內部群組「自己」已包含此版，繁中測試說明已寫入；實體手機安裝未在本輪驗證。
 
+### 0.1.2 介面打磨版（build 202611020655；2026-11-02）
+
+共用設計層、今日盤勢卡與持股待辦、失效條件去重、個股／報告頁直接設警報與問 AI、工具頁改版、自選頁標題列間距與篩選統計。程式由 [PR #196](https://github.com/audichuang/daily_stock_analysis/pull/196) 在 CI 41359415622 通過後合進 develop（`042da2ef`）；合併前在 `DSA iPhone 18 Pro Max` 跑完整 `scripts/test-ui.sh`：17 條 UI 測試 0 失敗（1 條真實 Cloudflare opt-in 跳過）。從該提交封存、匯出 IPA，以 `asc builds upload` 上傳，Apple 回讀 `VALID`／`INTERNAL_ONLY`，內部群組「自己」已包含此版，繁中測試說明已寫入；實體手機安裝未在本輪驗證。匯出時 PATH 前段要是系統 `/usr/bin`（Homebrew rsync 會讓 `exportArchive` 報 Copy failed），`testflight.sh` 內已處理，手動匯出要自己補。
+
 Cloudflare Tunnel 已部署；原生 URLSession 已取得公網 200 JSON，受保護 API 未登入回 401。使用者成功公網登入、登入後 cookie 與正式 App/API 流程仍待驗證。
 
 驗收結果及金融資料限制見 [驗證紀錄](verification.md)。回滾可改用前一有效 build，或於登入頁改回私有入口並啟用 Tailscale；本次沒有遷移帳本資料。入口部署回滾依 nas-ops 的 `operator/cloudflare/dsa-public-2026-10-29.md`，只撤回本次 hostname 的設定。
