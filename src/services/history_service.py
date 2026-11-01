@@ -57,7 +57,11 @@ from src.schemas.decision_action import (
     display_action_fields,
     display_action_fields_for_result,
     display_operation_advice_for_result,
+    normalize_decision_action,
 )
+from src.services.market_symbol_utils import market_from_stock_code
+from src.services.report_decision_fields import extract_one_sentence
+from src.utils.zh_s2t import to_traditional
 from src.schemas.decision_scale import extract_decision_guardrail_reason
 from src.utils.sniper_points import find_sniper_points, find_sniper_prices, resolve_sniper_prices
 from src.utils.data_processing import (
@@ -72,6 +76,41 @@ if TYPE_CHECKING:
     from src.analyzer import AnalysisResult
 
 logger = logging.getLogger(__name__)
+
+# 新聞摘要裡與個股無關的固定句：免責聲明與搜尋答案框拼出來的行情列。只丟整句，不改寫內容。
+_NEWS_BOILERPLATE_RE = re.compile(
+    r"免責聲明|免责声明|投資有風險|投资有风险|不構成投資建議|不构成投资建议|僅供參考|仅供参考|"
+    r"版權所有|版权所有|disclaimer|not (?:investment|financial) advice|for informational purposes only|"
+    r"^\s*(?:價格|价格|漲跌|涨跌|開盤|开盘|收盤|收盘|成交量|price|change)\s*[:：]",
+    re.IGNORECASE,
+)
+_NEWS_SENTENCE_RE = re.compile(r"[^。！？!?\n]+[。！？!?]*")
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_NEWS_KEY_POINT_LIMIT = 80
+
+
+def clean_news_snippet(snippet: Optional[str]) -> str:
+    """去掉免責與行情樣板句；沒有命中就回原文，連空白都不動。"""
+    text = (snippet or "").strip()
+    if not text:
+        return ""
+    sentences = [match.group(0) for match in _NEWS_SENTENCE_RE.finditer(text)]
+    kept = [sentence for sentence in sentences if not _NEWS_BOILERPLATE_RE.search(sentence)]
+    if len(kept) == len(sentences):
+        return text
+    return "".join(kept).strip()
+
+
+def news_key_point(cleaned_snippet: str) -> Optional[str]:
+    """第一句當重點並轉繁中。讀取端沒有 LLM 可翻譯，外文來源回 None，不顯示外文當「繁中重點」。"""
+    match = _NEWS_SENTENCE_RE.search(cleaned_snippet or "")
+    sentence = match.group(0).strip() if match else ""
+    if not sentence or not _CJK_RE.search(sentence):
+        return None
+    sentence = to_traditional(sentence)
+    if len(sentence) > _NEWS_KEY_POINT_LIMIT:
+        return sentence[: _NEWS_KEY_POINT_LIMIT - 1].rstrip() + "…"
+    return sentence
 
 
 class MarkdownReportGenerationError(Exception):
@@ -257,6 +296,9 @@ class HistoryService:
         limit: int = 20,
         include_ambiguous_numeric_aliases: bool = True,
         market_hint: Optional[str] = None,
+        q: Optional[str] = None,
+        market: Optional[str] = None,
+        action: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Get history analysis list.
@@ -272,6 +314,9 @@ class HistoryService:
                 aliases that may collide across offshore markets.
             market_hint: Trusted market identity for candidate expansion. When
                 present, candidates from other indexed markets are excluded.
+            q: 代號或名稱關鍵字
+            market: 只留這個市場的個股報告（tw/us/hk/cn/jp/kr）
+            action: 只留顯示動作為此枚舉的報告；認不得的值回空
 
         Returns:
             Dictionary containing total count and items
@@ -306,14 +351,30 @@ class HistoryService:
             # Calculate offset
             offset = (page - 1) * limit
 
+            keyword = (q or "").strip()
+            if market or action:
+                return self._get_history_list_scanned(
+                    code=stock_code,
+                    report_type=report_type,
+                    start_date=start_dt,
+                    end_date=end_dt,
+                    name_query=keyword or None,
+                    market=market,
+                    action=action,
+                    offset=offset,
+                    limit=limit,
+                )
+
             # Use new paginated query method
+            query_options: Dict[str, Any] = {"name_query": keyword} if keyword else {}
             records, total = self.db.get_analysis_history_paginated(
                 code=stock_code,
                 report_type=report_type,
                 start_date=start_dt,
                 end_date=end_dt,
                 offset=offset,
-                limit=limit
+                limit=limit,
+                **query_options,
             )
 
             # Convert to response format
@@ -329,6 +390,86 @@ class HistoryService:
         except Exception as e:
             logger.error(f"查询历史列表失败: {e}", exc_info=True)
             raise
+
+    def _get_history_list_scanned(
+        self,
+        *,
+        code: Any,
+        report_type: Optional[str],
+        start_date: Optional[date],
+        end_date: Optional[date],
+        name_query: Optional[str],
+        market: Optional[str],
+        action: Optional[str],
+        offset: int,
+        limit: int,
+    ) -> Dict[str, Any]:
+        """市場與動作不是資料表欄位：先取輕量列比對，總數才準，再載入當頁完整資料。"""
+        wanted_action = normalize_decision_action(action) if action else None
+        if action and wanted_action is None:
+            return {"total": 0, "items": [], "stock_total": 0, "market_review_total": 0}
+        wanted_market = str(market or "").strip().lower() or None
+
+        rows = self.db.get_analysis_history_filter_rows(
+            code=code,
+            report_type=report_type,
+            start_date=start_date,
+            end_date=end_date,
+            name_query=name_query,
+            include_raw_result=wanted_action is not None,
+        )
+        matched: List[int] = []
+        stock_total = 0
+        market_review_total = 0
+        for row in rows:
+            is_market_review = row.report_type == "market_review"
+            if wanted_market and market_from_stock_code(row.code) != wanted_market:
+                continue
+            if wanted_action is not None:
+                raw_result = parse_json_field(row.raw_result)
+                if self._decision_action_fields_for_record(row, raw_result)["action"] != wanted_action:
+                    continue
+            matched.append(row.id)
+            if is_market_review:
+                market_review_total += 1
+            else:
+                stock_total += 1
+
+        records = self.db.get_analysis_history_by_ids(matched[offset:offset + limit])
+        return {
+            "total": len(matched),
+            "items": [self._record_to_list_item_dict(record) for record in records],
+            "stock_total": stock_total,
+            "market_review_total": market_review_total,
+        }
+
+    def get_history_kind_totals(
+        self,
+        *,
+        stock_code: Optional[str] = None,
+        report_type: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        q: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """個股與大盤分開的總數；篩選語意與 get_history_list 相同。"""
+        codes = self._history_code_filter_candidates(stock_code) if stock_code else None
+        if stock_code and not codes:
+            return {"stock": 0, "market_review": 0}
+
+        def parse_day(value: Optional[str]) -> Optional[date]:
+            try:
+                return datetime.strptime(value, "%Y-%m-%d").date() if value else None
+            except ValueError:
+                return None
+
+        return self.db.count_analysis_history_by_kind(
+            code=codes,
+            report_type=report_type,
+            start_date=parse_day(start_date),
+            end_date=parse_day(end_date),
+            name_query=(q or "").strip() or None,
+        )
 
     @staticmethod
     def _safe_float(value: Any) -> Optional[float]:
@@ -465,6 +606,7 @@ class HistoryService:
             "created_at": self._serialize_created_at(record.created_at),
             "market_phase_summary": market_phase_summary,
             "asset_type": self._asset_type_for_record(record),
+            "one_sentence": extract_one_sentence(raw_result),
             **market_fields,
         }
 
@@ -895,7 +1037,8 @@ class HistoryService:
             items: List[Dict[str, Any]] = []
             internal_note = "【DeepSeek 搜尋日期未經原文核實；日級日期非精確發布時間】"
             for record in records:
-                snippet = (record.snippet or "").replace(internal_note, "").strip()
+                snippet = clean_news_snippet((record.snippet or "").replace(internal_note, ""))
+                key_point = news_key_point(snippet)
                 if len(snippet) > 200:
                     snippet = f"{snippet[:197]}..."
                 items.append({
@@ -905,6 +1048,8 @@ class HistoryService:
                     "source": (record.source or "").replace(internal_note, "").strip() or None,
                     "published_date": record.published_date.isoformat() if record.published_date else None,
                     "dimension": record.dimension,
+                    "published_at": record.published_date.isoformat() if record.published_date else None,
+                    "key_point": key_point,
                 })
 
             return items

@@ -257,6 +257,11 @@ def _coalesce_int(*values: Any) -> Optional[int]:
     return None
 
 
+def _query_text(value: Any) -> Optional[str]:
+    """直接呼叫端點函式時預設值是 Query 物件，不能當成有傳參數。"""
+    return value.strip() or None if isinstance(value, str) else None
+
+
 @router.get(
     "",
     response_model=HistoryListResponse,
@@ -274,6 +279,9 @@ def get_history_list(
     end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD)"),
     page: int = Query(1, ge=1, description="页码（从 1 开始）"),
     limit: int = Query(20, ge=1, le=100, description="每页数量"),
+    q: Optional[str] = Query(None, max_length=64, description="代號或名稱關鍵字"),
+    market: Optional[str] = Query(None, max_length=8, description="市場（tw/us/hk/cn/jp/kr）；大盤複盤不屬於任何市場"),
+    action: Optional[str] = Query(None, max_length=16, description="顯示動作枚舉（buy/add/hold/reduce/sell/watch/avoid/alert）"),
     db_manager: DatabaseManager = Depends(get_database_manager)
 ) -> HistoryListResponse:
     """
@@ -297,14 +305,37 @@ def get_history_list(
         service = HistoryService(db_manager)
         
         # 使用 def 而非 async def，FastAPI 自动在线程池中执行
+        keyword = _query_text(q)
+        market_filter = _query_text(market)
+        action_filter = _query_text(action)
+        filters: Dict[str, Any] = {
+            key: value
+            for key, value in (("q", keyword), ("market", market_filter), ("action", action_filter))
+            if value
+        }
         result = service.get_history_list(
             stock_code=stock_code,
             report_type=report_type,
             start_date=start_date,
             end_date=end_date,
             page=page,
-            limit=limit
+            limit=limit,
+            **filters,
         )
+        stock_total = result.get("stock_total")
+        market_review_total = result.get("market_review_total")
+        if stock_total is None:
+            # 掃描路徑已自帶；SQL 路徑另外算一次 GROUP BY。
+            totals = service.get_history_kind_totals(
+                stock_code=stock_code,
+                report_type=report_type,
+                start_date=start_date,
+                end_date=end_date,
+                q=keyword,
+            )
+            if isinstance(totals, dict):
+                stock_total = totals.get("stock")
+                market_review_total = totals.get("market_review")
         
         # 转换为响应模型
         items = [
@@ -329,6 +360,7 @@ def get_history_list(
                 created_at=item.get("created_at"),
                 market_phase_summary=item.get("market_phase_summary"),
                 asset_type=item.get("asset_type"),
+                one_sentence=item.get("one_sentence"),
             )
             for item in result.get("items", [])
         ]
@@ -337,7 +369,9 @@ def get_history_list(
             total=result.get("total", 0),
             page=page,
             limit=limit,
-            items=items
+            items=items,
+            stock_total=stock_total,
+            market_review_total=market_review_total,
         )
         
     except Exception as e:
@@ -539,6 +573,8 @@ def get_stock_bar(
                 analysis_counts_by_code.get(candidate, 0)
                 for candidate in record_candidates.get(record.id, ())
             )
+            market_fields = service._extract_history_market_fields(getattr(record, "context_snapshot", None))
+            last_analysis_time = service._serialize_created_at(record.created_at)
             items.append(
                 StockBarItem(
                     id=record.id,
@@ -550,13 +586,17 @@ def get_stock_bar(
                     action=action_fields["action"],
                     action_label=action_fields["action_label"],
                     analysis_count=analysis_count,
-                    last_analysis_time=service._serialize_created_at(record.created_at),
+                    last_analysis_time=last_analysis_time,
                     model_used=normalize_model_used(model_used),
                     market_phase_summary=service._display_market_phase_summary(
                         record.code,
                         getattr(record, "context_snapshot", None),
                     ),
                     asset_type=asset_type_from_canonical_code(record.code),
+                    analysis_price=market_fields.get("current_price"),
+                    change_pct=market_fields.get("change_pct"),
+                    score=sentiment_score,
+                    last_analyzed_at=last_analysis_time,
                 )
             )
 
@@ -899,6 +939,8 @@ def get_history_news(
                 source=item.get("source"),
                 published_date=item.get("published_date"),
                 dimension=item.get("dimension"),
+                published_at=item.get("published_at"),
+                key_point=item.get("key_point"),
             )
             for item in items
         ]

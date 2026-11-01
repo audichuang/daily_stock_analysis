@@ -58,6 +58,7 @@ class HistoryItem(BaseModel):
         None,
         description="后端权威资产类型（stock/index）；由持久化代码经 parser 生成。旧客户端与 market review 可缺省。",
     )
+    one_sentence: Optional[str] = Field(None, description="一句話結論；大盤複盤沒有此欄，為 null")
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -80,6 +81,10 @@ class HistoryListResponse(BaseModel):
     page: int = Field(..., description="当前页码")
     limit: int = Field(..., description="每页数量")
     items: List[HistoryItem] = Field(default_factory=list, description="记录列表")
+    stock_total: Optional[int] = Field(None, description="相同篩選條件下的個股報告數")
+    market_review_total: Optional[int] = Field(None, description="相同篩選條件下的大盤複盤數")
+    stock_total: Optional[int] = Field(None, description="相同篩選條件下的個股報告數")
+    market_review_total: Optional[int] = Field(None, description="相同篩選條件下的大盤複盤數")
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -112,6 +117,10 @@ class NewsIntelItem(BaseModel):
     source: Optional[str] = Field(None, description="原始來源名稱")
     published_date: Optional[str] = Field(None, description="來源提供的發布日期；未知為 null")
     dimension: Optional[str] = Field(None, description="搜尋面向；用於區分新聞、公告與參考資料")
+    published_at: Optional[str] = Field(None, description="來源提供的發布時間（ISO）；未知為 null，不以抓取時間代替")
+    key_point: Optional[str] = Field(None, description="繁中一句重點，取自清理後的摘要；外文來源為 null")
+    published_at: Optional[str] = Field(None, description="來源提供的發布時間（ISO）；未知為 null，不以抓取時間代替")
+    key_point: Optional[str] = Field(None, description="繁中一句重點，取自清理後的摘要；外文來源為 null")
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -440,6 +449,10 @@ class StockBarItem(BaseModel):
         None,
         description="后端权威资产类型（stock/index）；由持久化代码经 parser 生成。旧客户端可缺省。",
     )
+    analysis_price: Optional[float] = Field(None, description="分析當時的價格，不是現價")
+    change_pct: Optional[float] = Field(None, description="分析當時的漲跌幅(%)")
+    score: Optional[int] = Field(None, description="最新評分；與 sentiment_score 相同")
+    last_analyzed_at: Optional[str] = Field(None, description="最近一次分析時間；與 last_analysis_time 相同")
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "id": 1234,

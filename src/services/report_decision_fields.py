@@ -148,3 +148,8 @@ def _iso_date(value: Any) -> Optional[str]:
         return date.fromisoformat(text).isoformat()
     except ValueError:
         return None
+
+
+def extract_one_sentence(raw_result: Any) -> Optional[str]:
+    """列表用，只取一句話結論。線上大盤複盤 0/202 有這個鍵，回 None 是預期。"""
+    return _text(_mapping(_mapping(raw_result, "dashboard"), "core_conclusion").get("one_sentence"))

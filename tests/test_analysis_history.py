@@ -205,6 +205,101 @@ class TestHeldForReport(unittest.TestCase):
         self.assertIsNone(_held_for_report({"report_type": "market_review"}, MagicMock()))
 
 
+class TestHistoryLibraryFilters(unittest.TestCase):
+    """B06：q、market、action 與個股／大盤分開的總數，用真的 SQLite 跑查詢。"""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self._original_env = {key: os.environ.get(key) for key in ("ENV_FILE", "DATABASE_PATH")}
+        env_path = os.path.join(self._temp_dir.name, ".env")
+        with open(env_path, "w", encoding="utf-8") as env_file:
+            env_file.write("STOCK_LIST=600519\n")
+        os.environ["ENV_FILE"] = env_path
+        os.environ["DATABASE_PATH"] = os.path.join(self._temp_dir.name, "library.db")
+        Config.reset_instance()
+        DatabaseManager.reset_instance()
+        self.db = DatabaseManager.get_instance()
+        rows = [
+            ("2330.TW", "台積電", "simple", 72, "買入", {"action": "buy", "dashboard": {"core_conclusion": {"one_sentence": "買進訊號"}}}),
+            ("6488.TWO", "環球晶", "simple", 30, "減倉", {"action": "reduce"}),
+            ("AAPL", "Apple Inc", "simple", 50, "觀望", {"action": "watch"}),
+            ("TSLA", "百分%比_測試", "simple", 50, "觀望", {"action": "watch"}),
+            ("MARKET", "大盤複盤", "market_review", None, None, {"raw_response": "複盤"}),
+        ]
+        with self.db.get_session() as session:
+            for code, name, report_type, score, advice, raw in rows:
+                session.add(AnalysisHistory(
+                    query_id=f"q-{code}", code=code, name=name, report_type=report_type,
+                    sentiment_score=score, operation_advice=advice, raw_result=json.dumps(raw, ensure_ascii=False),
+                    created_at=datetime.now(),
+                ))
+            session.commit()
+        self.service = HistoryService(self.db)
+
+    def tearDown(self) -> None:
+        DatabaseManager.reset_instance()
+        Config.reset_instance()
+        for key, value in self._original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self._temp_dir.cleanup()
+
+    def _codes(self, **filters):
+        result = self.service.get_history_list(page=1, limit=20, **filters)
+        return sorted(item["stock_code"] for item in result["items"]), result
+
+    def test_q_matches_code_and_name_case_insensitively(self):
+        self.assertEqual(self._codes(q="aapl")[0], ["AAPL"])
+        self.assertEqual(self._codes(q="台積")[0], ["2330.TW"])
+
+    def test_q_treats_wildcards_literally(self):
+        self.assertEqual(self._codes(q="%")[0], ["TSLA"])
+        self.assertEqual(self._codes(q="_")[0], ["TSLA"])
+
+    def test_market_filter_excludes_other_markets_and_market_review(self):
+        codes, result = self._codes(market="tw")
+        self.assertEqual(codes, ["2330.TW", "6488.TWO"])
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(result["stock_total"], 2)
+        self.assertEqual(result["market_review_total"], 0)
+
+    def test_action_filter_uses_structured_action_not_stored_label(self):
+        codes, result = self._codes(action="reduce")
+        self.assertEqual(codes, ["6488.TWO"])
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(self._codes(action="buy", market="us")[0], [])
+
+    def test_unknown_action_returns_empty(self):
+        codes, result = self._codes(action="moon")
+        self.assertEqual(codes, [])
+        self.assertEqual(result["total"], 0)
+
+    def test_total_counts_all_matches_not_just_the_page(self):
+        result = self.service.get_history_list(page=1, limit=1, market="tw")
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(result["total"], 2)
+
+    def test_kind_totals_follow_same_filters(self):
+        self.assertEqual(self.service.get_history_kind_totals(), {"stock": 4, "market_review": 1})
+        self.assertEqual(self.service.get_history_kind_totals(q="台積"), {"stock": 1, "market_review": 0})
+
+    def test_list_item_one_sentence(self):
+        items = {item["stock_code"]: item for item in self.service.get_history_list(page=1, limit=20)["items"]}
+        self.assertEqual(items["2330.TW"]["one_sentence"], "買進訊號")
+        self.assertIsNone(items["MARKET"]["one_sentence"])
+
+    def test_endpoint_keeps_total_and_adds_kind_totals(self):
+        response = get_history_list(
+            stock_code=None, report_type=None, start_date=None, end_date=None,
+            page=1, limit=20, q=None, market=None, action=None, db_manager=self.db,
+        )
+        self.assertEqual(response.total, 5)
+        self.assertEqual(response.stock_total, 4)
+        self.assertEqual(response.market_review_total, 1)
+
+
 class TestHistoryCsiCandidateConvergence(unittest.TestCase):
     """PR #2267 review remediation: registered CSI explicit identities must
     converge in history filter candidates so a record saved under any
