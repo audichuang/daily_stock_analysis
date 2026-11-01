@@ -52,7 +52,7 @@
 
 ## 9. 合入与发布
 
-- 分支模型：工作分支 → PR 合進 **`develop`**（GitHub 預設分支，日常整合）；`main` 只代表已發版。工作分支前綴要在 `ci.yml` 的 `on:` 清單內，否則沒有 CI，PR 上的 checks 就是那次 push run。推工作分支後用 `gh run list --branch <分支>` 找到 run，再用 `gh-wait run <run-id> -R audichuang/daily_stock_analysis`（或 `gh-wait pr <PR 號> -R …`，放背景跑）等 CI 綠，綠了就自己合進 `develop`（§1）；交付說明引用那次 run。CI 在 ttnas 上出錯先看 `docs/ci-ttnas-runner.md`。建立或更新 PR 前照 `.claude/skills/shared/baseline-sync.md` 同步基线。
+- 分支模型：工作分支 → PR 合進 **`develop`**（GitHub 預設分支，日常整合）；`main` 只代表已發版。工作分支前綴要在 `ci.yml` 的 `on:` 清單內，否則沒有 CI，PR 上的 checks 就是那次 push run。推工作分支後用 `gh run list --branch <分支>` 找到 run，再用 `gh-wait run <run-id> -R audichuang/daily_stock_analysis`（或 `gh-wait pr <PR 號> -R …`，放背景跑）等 CI 綠，綠了就自己合進 `develop`（§1）；交付說明引用那次 run。CI 在自架 runner 上出錯先看 `docs/ci-self-hosted-runner.md`。建立或更新 PR 前照 `.claude/skills/shared/baseline-sync.md` 同步基线。
 - 發版（要先確認，§1）與部署流程見 `docs/nas-deploy.md`。發版用 `rel-YYYY.MM.DD` tag，不用 `v*.*.*`——那是上游的版號，會觸發上游的 release／Docker Hub／桌面端 workflow。
 
 ## 10. 本 fork 专属约定

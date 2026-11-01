@@ -34,7 +34,7 @@ def test_shard_roots_match_the_pytest_testpaths_contract() -> None:
 def test_real_ci_shards_are_complete_disjoint_and_balanced() -> None:
     test_files = discover_test_files()
     durations = load_durations()
-    # fork：片數要和 ci.yml 的 PYTEST_SPLITS 一致（4，跑在 ttnas self-hosted runner）。
+    # fork：片數要和 ci.yml 的 PYTEST_SPLITS 一致（4，跑在自架 runner，見 docs/ci-self-hosted-runner.md）。
     groups, totals = partition_test_files(test_files, durations, 4)
 
     flattened = [test_file for group in groups for test_file in group]

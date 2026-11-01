@@ -85,6 +85,77 @@ def test_docker_filter_still_skips_docs_only_changes():
         assert not _filter_output([path], rules), path
 
 
+def _backend_rules() -> list[str]:
+    import yaml
+
+    ci = _workflow(".github/workflows/ci.yml")
+    step = next(s for s in ci["jobs"]["changes"]["steps"] if s.get("id") == "backend-filter")
+    return yaml.load(str(step["with"]["filters"]), Loader=yaml.BaseLoader)["backend_non_web"]
+
+
+def test_backend_filter_skips_journal_and_ios_only_changes():
+    # 排程每天自動推 journal/*.jsonl 到 develop；不排除就每筆都跑完整 4 片後端測試。
+    rules = _backend_rules()
+    for path in ("journal/media-picks-verdicts.jsonl", "journal/closed-dates.txt",
+                 "apps/dsa-ios/App/ContentView.swift", "apps/dsa-ios/Core/Package.swift"):
+        assert not _filter_output([path], rules), path
+
+
+def test_backend_filter_still_runs_for_backend_inputs_next_to_skipped_paths():
+    # 反向：排除不能擴大到相鄰的程式碼（腳本、.claude 底下的程式、後端、測試）。
+    rules = _backend_rules()
+    for path in ("scripts/verify_swing_decisions.py", ".claude/skills/verify/scripts/instance.py",
+                 "src/agent/chat_object_decision.py", "market_data/db.py", "tests/test_x.py"):
+        assert _filter_output([path], rules), path
+
+
+def _md_files_read_by_tests() -> dict[str, str]:
+    """測試裡用 read_text／_read(／*_PATH = 讀的 repo 內 .md（相對路徑 -> 第一個出處）。"""
+    found: dict[str, str] = {}
+    for test_root in ("tests", "market_data/tests"):
+        for path in sorted((REPO_ROOT / test_root).rglob("*.py")):
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if '.md"' not in line or not re.search(r"read_text|_read\(|_PATH\s*=", line):
+                    continue
+                segs = re.findall(r'"([A-Za-z0-9_./-]+)"', line)
+                for i, seg in enumerate(segs):
+                    if not seg.endswith(".md"):
+                        continue
+                    # 取最長且存在的路徑：`ROOT / ".claude" / ... / "SKILL.md"` 不該被當成根目錄的 SKILL.md
+                    hits = ["/".join(segs[j:i + 1]) for j in range(i + 1)]
+                    hit = next((h for h in hits if (REPO_ROOT / h).is_file()), None)
+                    if hit:
+                        found.setdefault(hit, f"{path.relative_to(REPO_ROOT)}:{n}")
+    return found
+
+
+def _backend_triggered(path: str) -> bool:
+    import yaml
+
+    ci = _workflow(".github/workflows/ci.yml")
+    step = next(s for s in ci["jobs"]["changes"]["steps"] if s.get("id") == "filter")
+    filters = yaml.load(str(step["with"]["filters"]), Loader=yaml.BaseLoader)
+    return (_filter_output([path], _backend_rules())
+            or _filter_output([path], filters["backend_contract_assets"])
+            or _filter_output([path], filters["backend_web_contract"]))
+
+
+def test_every_markdown_read_by_tests_triggers_backend():
+    # `!**/*.md` 會讓「只改文件」不跑後端；被測試讀的 md 要列進 backend_contract_assets，
+    # 否則只改那份文件時，讀它的契約測試永遠不會跑（踩過：PR 範本、台股文件、skill）。
+    found = _md_files_read_by_tests()
+    assert ".github/PULL_REQUEST_TEMPLATE.md" in found  # 掃描器本身還看得到東西
+    missing = {p: src for p, src in found.items() if not _backend_triggered(p)}
+    assert not missing, f"這些 md 被測試讀取，但只改它們不會跑後端：{missing}"
+
+
+def test_plain_docs_still_skip_backend():
+    # 反向：沒有測試讀的文件仍不該觸發後端。
+    for path in ("README.md", "docs/research/2026-10-01-x.md", "docs/ci-self-hosted-runner.md",
+                 ".claude/skills/portfolio-check/SKILL.md"):
+        assert not _backend_triggered(path), path
+
+
 def _serve_path_market_data_modules() -> set[str]:
     modules: set[str] = set()
     files = [p for d in ("src", "data_provider", "api", "bot") for p in (REPO_ROOT / d).rglob("*.py")]

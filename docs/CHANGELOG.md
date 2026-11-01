@@ -86,6 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 用量 API 追加每日彙總、前期比較、估算費用（單價設於 `LLM_USAGE_PRICES`，未設顯示空值，本機 CLI 標示訂閱不計費）、快取命中率與管道，呼叫列表支援 `offset`、`call_type`、`sort`。
 - [改進] Web 支援 `?embed=ios` 內嵌模式：隱藏導覽與外框，旗標存在 sessionStorage，站內換頁不會遺失；判斷集中在 `utils/embedMode.ts`，不帶參數時畫面不變。
 - [改進] iOS 工具頁收斂外框：以 `?embed=ios` 載入，移除說明橫條、隱藏底部分頁、改用細進度條；載入失敗整頁顯示繁中錯誤且不留 WebView，匯出失敗用提示框不影響頁面；登出或更換連線時清掉工具頁的 cookie。
+- [chore] 測試會讀的 5 份 md（PR 範本、`docs/realtime-board.md`、`docs/tw-level-alerts.md`、`dsa-upstream-sync` 與 `tw-morning-call` 兩個 skill）列入 CI 的契約文件，只改它們也會跑後端；新增掃描測試，之後有測試開始讀新的 md 卻沒列入就會紅。
+- [chore] CI 只改 `journal/`（排程自動寫的決策日誌）或 `apps/dsa-ios/` 時不再跑 4 片後端測試；最近一週 `develop` 上 132 個 commit 有 27 個只改 journal、9 個只改 iOS 與文件。
+- [chore] CI 從 ttnas 搬到 ubuntu 工作站的 10 個自架 runner（label `ubuntu-desktop`，綁 P 核、`/tmp` 用 tmpfs）；3 個 run 同時跑時整輪約從 10–14 分降到 6–8 分。runner 文件改名為 `docs/ci-self-hosted-runner.md`，補上主機實測比較。
 - [改進] 問股辨識股名時先以子字串過濾再做 regex，不再每則訊息替數萬個名稱各編一次 regex（每則省約 1 秒）；後端離線測試總耗時約減半，CI 分片耗時表同步重算。
 - [修復] CI 的 web-gate 改用每次挑選的空 port 跑 Playwright fixture，修正自架 runner 上兩個 run 同時跑時 `4173 is already used` 的假紅。
 - [改進] iOS 今日頁新增近期事件總覽，行事曆從工具頁移到這裡；工具頁只留警報與連線捷徑、常用四項，其餘收進「進階」，移除與原生畫面重複的完整分析入口。
