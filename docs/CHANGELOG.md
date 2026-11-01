@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 問股問「今天台股大盤怎麼看」時抓不到加權指數：`get_market_indices` 工具補上 `tw` 地區，模型不必再拿指數代號呼叫受討論對象限制的個股工具（先前一律回 `stock_scope_violation`）
 - [修復] 手機報告的「完整分析報告／追問 AI」操作列不再被底部分頁蓋住；手機開 `/funds?fund=` 直接顯示基金詳情；`?stock=` 查無報告或查詢失敗時不再顯示上一檔報告
 - [修復] 問股切換標的後，摘要卡不再顯示上一檔的結論、價位與報價
 - [修復] 回測市場篩選不再把 SHOP、SHEL、HKD 判成中港股，也不再把日韓代號算進美股

@@ -47,16 +47,18 @@ def _handle_get_market_indices(region: str = "cn") -> dict:
 
 get_market_indices_tool = ToolDefinition(
     name="get_market_indices",
-    description="Get major market indices (e.g., Shanghai Composite, Shenzhen Component, "
-                "CSI 300 for China; S&P 500, Nasdaq, Dow for US). Provides market overview.",
+    description="Get major market indices (e.g., TAIEX and TPEx index for Taiwan; Shanghai Composite, "
+                "Shenzhen Component, CSI 300 for China; S&P 500, Nasdaq, Dow for US). Provides market overview. "
+                "Use this for market-wide questions instead of stock tools with index symbols.",
     parameters=[
         ToolParameter(
             name="region",
             type="string",
-            description="Market region: 'cn' for China A-shares, 'hk' for Hong Kong, 'us' for US stocks (default: 'cn')",
+            description="Market region: 'tw' for Taiwan, 'cn' for China A-shares, 'hk' for Hong Kong, "
+                        "'us' for US stocks (default: 'cn')",
             required=False,
             default="cn",
-            enum=["cn", "hk", "us"],
+            enum=["tw", "cn", "hk", "us"],
         ),
     ],
     handler=_handle_get_market_indices,
