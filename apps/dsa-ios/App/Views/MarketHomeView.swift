@@ -45,6 +45,7 @@ struct MarketHomeView: View {
                         .accessibilityValue("分析時間 \(DisplayFormat.time(review.createdAt))")
                     }.buttonStyle(.plain)
                 }
+                UpcomingEventsCard()
                 VStack(spacing: 0) {
                     HStack(alignment: .center) {
                         Text("我的關注").font(.headline).foregroundStyle(Theme.text)

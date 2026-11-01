@@ -10,6 +10,7 @@
 		045C0C7F57F42F2403CE7E8D /* PresentationText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 898E74B4A88AB8F16170069C /* PresentationText.swift */; };
 		1047BE207CEE3B45F93A0566 /* WebNavigationPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A90420C0C660A69F667DBD8 /* WebNavigationPolicyTests.swift */; };
 		18826AF952BF350D64B19435 /* ResearchLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0205D8374A116CBAA60341 /* ResearchLibraryView.swift */; };
+		20C7AD8A210E65179CE35C30 /* UpcomingEventsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = D57E7D19AECF46F08C91E4F1 /* UpcomingEventsCard.swift */; };
 		2503549958E32E6AFE0311E4 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41F77F1E6281EAAD05ECA914 /* DesignSystem.swift */; };
 		2CDDAA6900BC849B274FCC40 /* PortfolioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA2F732D2D6F5033EC4EDD48 /* PortfolioView.swift */; };
 		300CE0BB7D3E27F6CAE414CA /* ResearchReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A12209C085640B76671514 /* ResearchReportView.swift */; };
@@ -92,6 +93,7 @@
 		CEE47EB2373AB886EB218538 /* PortfolioPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortfolioPresentationTests.swift; sourceTree = "<group>"; };
 		CF1DB8DFF481B78126C3E72E /* ToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolsView.swift; sourceTree = "<group>"; };
 		D3FBA665C8D01DE1C9433DBC /* MarketDataPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketDataPresentationTests.swift; sourceTree = "<group>"; };
+		D57E7D19AECF46F08C91E4F1 /* UpcomingEventsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpcomingEventsCard.swift; sourceTree = "<group>"; };
 		DA7E88F5BDA202571B017CFE /* DSAMarketUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = DSAMarketUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DED375596DDB58BFD995964B /* AppStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStore.swift; sourceTree = "<group>"; };
 		E24842A6C5750F64D82A44EE /* ReportNewsPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportNewsPresentationTests.swift; sourceTree = "<group>"; };
@@ -165,6 +167,7 @@
 				32E03FEBDA0AEE618E70985D /* StockDetailView.swift */,
 				CF1DB8DFF481B78126C3E72E /* ToolsView.swift */,
 				FC3E68F2FDA242DCAA280AE4 /* ToolWebView.swift */,
+				D57E7D19AECF46F08C91E4F1 /* UpcomingEventsCard.swift */,
 				53023E587011259DF46F3CF4 /* WatchlistView.swift */,
 			);
 			path = Views;
@@ -365,6 +368,7 @@
 				33E856389ECEE45AC617E6DD /* StockDetailView.swift in Sources */,
 				545FFD1B5F0CAD3C0FA1955A /* ToolWebView.swift in Sources */,
 				A92032EEDB621B4809DC9C12 /* ToolsView.swift in Sources */,
+				20C7AD8A210E65179CE35C30 /* UpcomingEventsCard.swift in Sources */,
 				32FBB2D4824A2264A795807D /* WatchlistView.swift in Sources */,
 				97B12146F06F13EC9AC63EC8 /* WebNavigationPolicy.swift in Sources */,
 			);

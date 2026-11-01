@@ -40,6 +40,18 @@ final class EventCalendarTests: XCTestCase {
         XCTAssertEqual([deadline, nextTaipei].nextCompanyEvent(now: now)?.date, "2026-11-03")
     }
 
+    func testUpcomingQueryRangeStartsFromEarliestMarketDate() throws {
+        // 台北 11/1 08:00 = 美東 10/31 20:00（夏令時間）。
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-01T00:00:00Z"))
+        let taipei = try XCTUnwrap(TimeZone(identifier: "Asia/Taipei"))
+        let range = try XCTUnwrap(EventCalendarDate.upcomingQueryRange(now: now, days: 45, deviceTimeZone: taipei))
+        XCTAssertEqual(range.from, "2026-10-31")
+        XCTAssertEqual(range.to, "2026-12-15")
+        // 台北下午美東也已同日時，下界不能再往前多退一天。
+        let later = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-01T06:00:00Z"))
+        XCTAssertEqual(EventCalendarDate.upcomingQueryRange(now: later, days: 45, deviceTimeZone: taipei)?.from, "2026-11-01")
+    }
+
     func testCalendarKeepsSourceDateAcrossDeviceTimezones() throws {
         let now = Date()
         let calendar = EventCalendarDate.calendar

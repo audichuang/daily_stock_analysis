@@ -23,9 +23,7 @@ final class AppStore: ObservableObject {
     @Published var selectedTab = 0
     @Published var stockIndex: [StockIndexItem] = []
     @Published var alertMonitor: AlertMonitorStatus?
-    @Published var upcomingEventCount: Int?
     @Published var alertMonitorFailed = false
-    @Published var calendarStatusFailed = false
     @Published var colorConvention: MarketColorConvention {
         didSet { UserDefaults.standard.set(colorConvention.rawValue, forKey: "marketColors") }
     }
@@ -144,24 +142,12 @@ final class AppStore: ObservableObject {
     /// 工具頁捷徑的狀態值。由 store 自己的 Task 執行：`.onAppear` 離頁時不該把還在等的請求取消成「已取消」。
     func refreshToolsStatus() {
         guard let client, connected else { return }
-        // 兩個值各自成敗：App 比後端先更新時，監控端點 404 不該連累行事曆。
         Task { [weak self] in
             do {
                 self?.alertMonitor = try await client.alertMonitorStatus()
                 self?.alertMonitorFailed = false
             } catch {
                 self?.alertMonitorFailed = true
-            }
-        }
-        Task { [weak self] in
-            let today = Date()
-            let end = today.addingTimeInterval(7 * 86_400)
-            do {
-                let calendar = try await client.calendarEvents(from: EventCalendarDate.key(today), to: EventCalendarDate.key(end))
-                self?.upcomingEventCount = calendar.events.count
-                self?.calendarStatusFailed = false
-            } catch {
-                self?.calendarStatusFailed = true
             }
         }
     }
