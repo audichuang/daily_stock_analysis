@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 個股完整報告抽屜的標題列不再蓋住第一個標題、捲動時上方不再露縫透字；資產頁待處理的負現金改用 NT$ 整數／US$ 兩位，與全頁金額一致
 - [修復] 上線驗收後的介面收尾：個股報告首屏補回關鍵價位條與「停損 A → B」比較（無新聞護欄擋價位時不顯示）；AI 建議「已觸停損」篩選的總數、分頁、空狀態一致並可一鍵清除篩選；首頁待減碼改與 AI 建議頁同一口徑，金額改 NT$ 前綴；大盤複盤標題去 emoji、今日結論不再重複分數、Markdown 清單恢復圓點、英文產業名補中文；首頁手機清單抽屜加標題與關閉鈕、釘頂複盤列顯示交易日；盯盤表頭固定、跳轉列不被蓋；資產頁台幣金額改整數 NT$；頁名不再重複「 - DSA」；基金、AI 用量、回測、資料中心、警報細節修正
 - [改進] 介面全面打磨（10 個 agent 實看畫面＋6 個 agent 提案後整理成 29 張票）：
   - Web：修正全域 CSS 蓋掉按鈕字級與連結色；行情紅綠亮度拉平、深色次要字對比提到 AA；金額不再從中間斷行並加 NT$／US$ 前綴；手機與 iOS 內嵌頁只留一個標題、全站頁名統一；大盤複盤的明日計畫置頂、只留一組動作列，產生新複盤前先確認；首頁清單表頭壓縮、待處理事項置頂；盯盤、報告、資產、基金、AI 建議、回測、問股、警報、資料中心、AI 用量、設定各頁版面整理；從報告價位一鍵建價格警報（`/alerts?new=1&type=price_cross&direction=&price=`）；持股頁決策訊號由逐檔請求改成一次
