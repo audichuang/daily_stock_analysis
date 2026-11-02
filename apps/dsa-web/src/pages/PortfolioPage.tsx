@@ -1807,7 +1807,7 @@ const PortfolioPage: React.FC = () => {
         accounts: negativeCashAccounts
           .map((account) => formatUiText(w10Text.pendingCashAccount, {
             account: account.accountName,
-            amount: formatMoney(account.totalCash, account.baseCurrency),
+            amount: formatAmount(account.totalCash, account.baseCurrency),
           }))
           .join('、'),
       }),

@@ -2685,6 +2685,25 @@ describe('PortfolioPage FX refresh', () => {
     expect(accountSelect.value).toBe('2');
   });
 
+  it('formats negative cash in the pending row like other aggregate amounts', async () => {
+    const base = makeSnapshot({ fxStale: false, accountCount: 2 });
+    const account = base.accounts[0];
+    getSnapshot.mockResolvedValueOnce({
+      ...base,
+      accounts: [
+        { ...account, accountId: 1, accountName: '國泰', baseCurrency: 'TWD', totalCash: -556911.87 },
+        { ...account, accountId: 2, accountName: '永豐', baseCurrency: 'USD', totalCash: -7895.07 },
+      ],
+    });
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    const pending = await screen.findByTestId('portfolio-pending');
+    expect(pending).toHaveTextContent('國泰（NT$ −556,912）、永豐（US$ −7,895.07）');
+    expect(pending).not.toHaveTextContent('TWD');
+  });
+
   it('merges one symbol across accounts and offers analysis per account', async () => {
     getAccounts.mockResolvedValueOnce(makeAccounts([{ id: 1, name: 'Main' }, { id: 2, name: 'Alt' }]));
     const base = makeSnapshot({ fxStale: false, accountCount: 2 });

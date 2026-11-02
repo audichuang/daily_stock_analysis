@@ -112,8 +112,9 @@ export const ReportMarkdownPanel: React.FC<ReportMarkdownPanelProps> = ({
 
   return (
     <>
-      {/* Drawer 內容區有 p-6，負邊距讓固定列貼齊捲動區上緣 */}
-      <div className="sticky top-0 z-10 -mx-6 -mt-6 mb-4 border-b border-border/60 bg-card px-6 py-3" data-testid="report-drawer-header">
+      {/* Drawer 內容區有 p-6：Chrome 的 sticky 從 padding 內側起算，top 要用 -top-6 抵消，
+          否則固定列一直停在上緣下方 24px，露縫並在剛打開時壓住首個標題。負邊距讓它貼齊捲動區兩側與上緣。 */}
+      <div className="sticky -top-6 z-10 -mx-6 -mt-6 mb-4 border-b border-border/60 bg-card px-6 py-3" data-testid="report-drawer-header">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-base font-semibold text-foreground">{stockName || stockCode}</h2>
