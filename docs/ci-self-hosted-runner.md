@@ -43,7 +43,7 @@
 ## 為什麼是這些設定
 
 - **4 片 shard**：最慢那片被上面那個大檔卡住（約 150 秒），4 片時各片已接近它，再多片不會更快。片數是**每個 run** 的：同時推好幾個工作分支等於 8～16 片一起跑，排隊與 CPU 爭用都會拉長整輪。
-- **docker-build 用 `driver: docker`**：直接用 runner 主機 daemon 的層快取。`type=gha` 快取每次要經家用網路下載整份映像層，實測 456 秒，改完 7 秒。代價是每次映像內容變了，會在主機留下約 1.7 GB 的 dangling image，清理方式見 manifest。
+- **docker-build 用 `driver: docker`**：直接用 runner 主機 daemon 的層快取。`type=gha` 快取每次要經家用網路下載整份映像層，實測 456 秒，改完 7 秒。代價是每次映像內容變了，會在主機留下約 1.7 GB 的 dangling image，清理方式見 manifest。所有 runner 共用這個 daemon，不同分支的 docker-build 會同時跑，所以 build 與兩個 smoke 步驟共用 job 層的 `CI_IMAGE_TAG`（`stock-analysis:test-<run_id>-<run_attempt>`），smoke 只跑自己那個 tag，job 結束（含失敗）以 `always()` 只刪自己的 tag；不要改回固定 tag，也不要在 job 裡 prune，會刪到別的 run 正在用的映像。
 - **不用 `setup-python`／`setup-node` 的 `cache:`**：那是從 GitHub 下載。runner 的 uv／pip／npm／Playwright 快取放在共用的 volume；Python 本體與裝好的套件放在每台自己的 volume（第一次跑約 1.5 分鐘，之後幾秒）。
 - **公開期間的限制**：`ci.yml` 只收 push、不收 `pull_request`；fork PR 的 workflow 核准設成 `all_external_contributors`；兩條都不要放寬——runner 掛著 `docker.sock`，等同主機 root。
 
